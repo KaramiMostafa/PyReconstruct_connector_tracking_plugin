@@ -8,9 +8,9 @@ setup(
     packages=find_packages(),
     python_requires=">=3.10",
     install_requires=[
-        "numpy",
-        "pandas",
-        "scipy",
+        "numpy==1.24.1",
+        "pandas==2.2.2",
+        "scipy==1.14.1",
         "torch>=1.12",
         "scikit-image",
         "roifile",
