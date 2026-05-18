@@ -33,9 +33,11 @@ def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefi
 
     rows = []
     refs: Dict[int, List[_Ref]] = {}
+    sections_by_frame: Dict[int, object] = {}
 
     for frame_idx, snum in enumerate(sec_nums):
         section = series.loadSection(snum)
+        sections_by_frame[frame_idx] = section
         tform = section.tform
 
         frame_refs: List[_Ref] = []
@@ -76,8 +78,7 @@ def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefi
 
     renamed = 0
     for frame_idx, sub in tracks_df.groupby("FrameID"):
-        snum = sec_nums[int(frame_idx)]
-        section = series.loadSection(snum)
+        section = sections_by_frame[int(frame_idx)]
 
         for r in sub.itertuples():
             idx = int(r.Label)
