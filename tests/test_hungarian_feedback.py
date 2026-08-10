@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from pyrecon_connector.hungarian_inapp import _Ref, _apply_link_feedback
+from pyrecon_connector.hungarian_inapp import _Ref, _apply_link_feedback, _nearest_ref_index
 
 
 class Trace:
@@ -62,6 +62,39 @@ class HungarianFeedbackTests(unittest.TestCase):
         }])
         self.assertEqual(applied, 1)
         self.assertEqual(tracks["TrackID"].tolist(), [1, 1, 1])
+
+    def test_correct_link_swaps_occupied_target_side_tracks(self):
+        tracks = pd.DataFrame([
+            {"FrameID": 0, "Label": 0, "TrackID": 1},
+            {"FrameID": 0, "Label": 1, "TrackID": 2},
+            {"FrameID": 1, "Label": 0, "TrackID": 1},
+            {"FrameID": 1, "Label": 1, "TrackID": 2},
+            {"FrameID": 2, "Label": 0, "TrackID": 1},
+            {"FrameID": 2, "Label": 1, "TrackID": 2},
+        ])
+        refs = {
+            0: [_Ref(13, Trace("cell_00168", 10)), _Ref(13, Trace("cell_00177", 20))],
+            1: [_Ref(14, Trace("cell_00168", 20)), _Ref(14, Trace("cell_00177", 10))],
+            2: [_Ref(15, Trace("cell_00168", 10)), _Ref(15, Trace("cell_00177", 20))],
+        }
+        applied = _apply_link_feedback(tracks, refs, {13: 0, 14: 1, 15: 2}, [{
+            "section": 13,
+            "primary_name": "cell_00168",
+            "primary_centroid": [10, 0],
+            "secondary_section": 14,
+            "secondary_name": "cell_00177",
+            "secondary_centroid": [10, 0],
+            "verdict": "correct",
+        }])
+        self.assertEqual(applied, 1)
+        self.assertEqual(tracks["TrackID"].tolist(), [1, 2, 2, 1, 2, 1])
+
+    def test_saved_centroid_wins_when_track_name_was_reassigned(self):
+        refs = [
+            _Ref(14, Trace("cell_00177", 50)),
+            _Ref(14, Trace("renamed_after_rerun", 10)),
+        ]
+        self.assertEqual(_nearest_ref_index(refs, "cell_00177", [10, 0]), 1)
 
 
 if __name__ == "__main__":

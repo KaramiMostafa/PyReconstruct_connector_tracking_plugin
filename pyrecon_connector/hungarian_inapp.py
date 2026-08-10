@@ -29,21 +29,25 @@ class _Ref:
 
 
 def _nearest_ref_index(frame_refs: List[_Ref], name: str, centroid) -> int | None:
-    exact = [index for index, ref in enumerate(frame_refs) if str(ref.trace.name) == str(name)]
-    candidates = exact or list(range(len(frame_refs)))
-    if not candidates:
+    if not frame_refs:
         return None
-    if centroid is None:
-        return candidates[0] if len(candidates) == 1 else None
-    cx, cy = float(centroid[0]), float(centroid[1])
-    return min(
-        candidates,
-        key=lambda index: (
-            float(frame_refs[index].trace.getCentroid()[0]) - cx
-        ) ** 2 + (
-            float(frame_refs[index].trace.getCentroid()[1]) - cy
-        ) ** 2,
-    )
+    if centroid is not None:
+        # A tracking rerun can rename every trace.  The saved centroid identifies
+        # the reviewed physical ROI more reliably than its previous track name.
+        cx, cy = float(centroid[0]), float(centroid[1])
+        return min(
+            range(len(frame_refs)),
+            key=lambda index: (
+                (
+                    float(frame_refs[index].trace.getCentroid()[0]) - cx
+                ) ** 2 + (
+                    float(frame_refs[index].trace.getCentroid()[1]) - cy
+                ) ** 2,
+                str(frame_refs[index].trace.name) != str(name),
+            ),
+        )
+    exact = [index for index, ref in enumerate(frame_refs) if str(ref.trace.name) == str(name)]
+    return exact[0] if len(exact) == 1 else None
 
 
 def _apply_link_feedback(tracks_df, refs, frame_for_section, records) -> int:
@@ -83,17 +87,24 @@ def _apply_link_feedback(tracks_df, refs, frame_for_section, records) -> int:
             next_track_id += 1
             applied += 1
         elif verdict == "correct" and source_tid != target_tid:
-            # Merge the target-side segment only, avoiding changes to earlier reviewed sections.
-            mask = (tracks_df["TrackID"] == target_tid) & (tracks_df["FrameID"] >= target_frame)
-            occupied = set(
-                tracks_df.loc[
-                    (tracks_df["TrackID"] == source_tid) & (tracks_df["FrameID"] >= target_frame),
-                    "FrameID",
-                ].astype(int)
+            # Force the reviewed target ROI onto the source identity. If both
+            # identities already occupy the same later frames, swap their
+            # target-side trajectories instead of silently skipping the link.
+            source_mask = (
+                (tracks_df["TrackID"] == source_tid)
+                & (tracks_df["FrameID"] >= target_frame)
             )
-            mask &= ~tracks_df["FrameID"].isin(occupied)
-            tracks_df.loc[mask, "TrackID"] = source_tid
-            applied += 1
+            target_mask = (
+                (tracks_df["TrackID"] == target_tid)
+                & (tracks_df["FrameID"] >= target_frame)
+            )
+            if bool(target_mask.any()):
+                sentinel = next_track_id
+                next_track_id += 1
+                tracks_df.loc[source_mask, "TrackID"] = sentinel
+                tracks_df.loc[target_mask, "TrackID"] = source_tid
+                tracks_df.loc[source_mask, "TrackID"] = target_tid
+                applied += 1
     return applied
 
 
