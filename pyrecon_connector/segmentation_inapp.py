@@ -55,6 +55,41 @@ def _read_section_image(section, channel: int = 0) -> np.ndarray:
     return arr
 
 
+def _select_cellpose_channels(section, channels=None, channel: int = 0) -> np.ndarray:
+    """Return one to three user-selected channels in Cellpose's YXC layout."""
+    from PyReconstruct.modules.backend.view.channel_utils import read_section_channels
+
+    available = read_section_channels(section)
+    if channels is None:
+        channels = [channel]
+
+    selected = []
+    for value in channels:
+        idx = int(value)
+        if idx not in selected:
+            selected.append(idx)
+
+    if not selected:
+        raise ValueError("Select at least one image channel for Cellpose-SAM.")
+    if len(selected) > 3:
+        raise ValueError("Cellpose-SAM accepts at most three image channels.")
+
+    invalid = [idx for idx in selected if idx < 0 or idx >= len(available)]
+    if invalid:
+        raise ValueError(
+            f"Channel index {invalid[0]} is out of range; this image has "
+            f"{len(available)} channel(s), indexed 0-{len(available) - 1}."
+        )
+
+    arrays = [np.asarray(available[idx]) for idx in selected]
+    shape = arrays[0].shape
+    if any(arr.ndim != 2 or arr.shape != shape for arr in arrays):
+        raise ValueError("Selected Cellpose-SAM channels must be equally sized 2D images.")
+    if len(arrays) == 1:
+        return arrays[0]
+    return np.stack(arrays, axis=-1)
+
+
 def _normalize_image(img: np.ndarray) -> np.ndarray:
     x = img.astype(np.float32)
     finite = np.isfinite(x)
@@ -67,6 +102,12 @@ def _normalize_image(img: np.ndarray) -> np.ndarray:
         hi = float(vals.max())
     x = (x - lo) / (hi - lo + 1e-8)
     return np.clip(x, 0.0, 1.0).astype(np.float32)
+
+
+def _normalize_cellpose_input(img: np.ndarray) -> np.ndarray:
+    if img.ndim == 2:
+        return _normalize_image(img)
+    return np.stack([_normalize_image(img[..., i]) for i in range(img.shape[-1])], axis=-1)
 
 
 def _standardize_image(img: np.ndarray) -> np.ndarray:
@@ -366,15 +407,22 @@ def _load_cellpose_model(gpu: bool = False, model_source: str = "builtin", model
         return models.CellposeModel(gpu=bool(gpu), pretrained_model="cpsam_v2")
 
 
-def run_cellpose_sam_segmentation_on_section(series, section_num: int, prefix: str = "cpsam_roi_", diameter=None, min_area: int = 25, gpu: bool = False, channel: int = 0, model_source: str = "builtin", model_path: str | None = None) -> int:
+def run_cellpose_sam_segmentation_on_section(series, section_num: int, prefix: str = "cpsam_roi_", diameter=None, min_area: int = 25, gpu: bool = False, channel: int = 0, model_source: str = "builtin", model_path: str | None = None, channels=None) -> int:
     section = series.loadSection(section_num)
-    img = _read_section_image(section, channel=channel)
-    img = _normalize_image(img)
+    img = _select_cellpose_channels(section, channels=channels, channel=channel)
+    img = _normalize_cellpose_input(img)
     model = _load_cellpose_model(gpu=gpu, model_source=model_source, model_path=model_path)
+    eval_kwargs = {
+        "diameter": diameter,
+        "min_size": int(min_area),
+    }
+    if img.ndim == 3:
+        eval_kwargs["channel_axis"] = -1
     try:
-        result = model.eval(img, channels=[0, 0], diameter=diameter, min_size=int(min_area))
+        result = model.eval(img, **eval_kwargs)
     except TypeError:
-        result = model.eval(img, channels=[0, 0], diameter=diameter)
+        eval_kwargs.pop("min_size")
+        result = model.eval(img, **eval_kwargs)
     masks = result[0] if isinstance(result, (tuple, list)) else result
     labels = np.asarray(masks).astype(np.int32)
     return _labels_to_traces(series, section_num, labels, prefix, min_area, "seg_cellpose_sam")
