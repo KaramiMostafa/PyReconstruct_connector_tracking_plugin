@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from tracking_BayesianTransformer import BayesianTransformerForCellTracking, train_bnn, load_model, match_pair
+from .hungarian_inapp import TRACKED_DAPI_GROUP, _apply_link_feedback
 
 
 def _poly_area(pts: List[Tuple[float, float]]) -> float:
@@ -162,7 +163,7 @@ def _build_track_table(df: pd.DataFrame, matches_by_frame: Dict[int, list], fram
     return pd.DataFrame(rows)
 
 
-def _rename_from_tracks(sections_by_frame, refs, tracks_df: pd.DataFrame, prefix: str) -> int:
+def _rename_from_tracks(series, sections_by_frame, refs, tracks_df: pd.DataFrame, prefix: str) -> int:
     renamed = 0
     for frame_idx, sub in tracks_df.groupby("FrameID"):
         section = sections_by_frame[int(frame_idx)]
@@ -172,15 +173,21 @@ def _rename_from_tracks(sections_by_frame, refs, tracks_df: pd.DataFrame, prefix
             if label < 0 or label >= len(refs[int(frame_idx)]):
                 continue
             ref = refs[int(frame_idx)][label]
+            old_name = str(ref.trace.name)
+            old_groups = set(series.object_groups.getObjectGroups(old_name))
+            new_name = f"{prefix}{track_id:05d}"
             section.editTraceAttributes(
                 traces=[ref.trace],
-                name=f"{prefix}{track_id:05d}",
+                name=new_name,
                 color=None,
                 tags=None,
                 mode=None,
                 add_tags=False,
                 log_event=True,
             )
+            series.object_groups.add(TRACKED_DAPI_GROUP, new_name)
+            for group in old_groups:
+                series.object_groups.add(group, new_name)
             renamed += 1
         section.save(update_series_data=True)
     return renamed
@@ -203,7 +210,18 @@ def _load_or_train_model(df: pd.DataFrame, frame_ids: List[int], model_path: str
     return model, mean, std, features
 
 
-def run_bayesian_tracking_on_series(series, start_sec: int, end_sec: int, prefix: str = "bt_cell_", model_path: str | None = None, train_epochs: int = 20, motion_threshold: float = 200.0, source_prefix: str = "", source_group: str = "") -> int:
+def run_bayesian_tracking_on_series(
+    series,
+    start_sec: int,
+    end_sec: int,
+    prefix: str = "bt_cell_",
+    model_path: str | None = None,
+    train_epochs: int = 20,
+    motion_threshold: float = 200.0,
+    source_prefix: str = "",
+    source_group: str = "",
+    apply_feedback: bool = True,
+) -> int:
     sec_nums = [s for s in sorted(series.sections.keys()) if int(start_sec) <= s <= int(end_sec)]
     if len(sec_nums) < 2:
         raise ValueError("Need at least 2 sections in range.")
@@ -228,6 +246,17 @@ def run_bayesian_tracking_on_series(series, start_sec: int, end_sec: int, prefix
         matches_by_frame[frame_idx] = matches
 
     tracks_df = _build_track_table(df, matches_by_frame, frame_ids)
-    renamed = _rename_from_tracks(sections_by_frame, refs, tracks_df, prefix)
+    if apply_feedback:
+        try:
+            from .feedback import dapi_link_constraints, load_feedback
+            _apply_link_feedback(
+                tracks_df,
+                refs,
+                {section_num: frame for frame, section_num in enumerate(sec_nums)},
+                dapi_link_constraints(load_feedback(series)),
+            )
+        except ValueError:
+            pass
+    renamed = _rename_from_tracks(series, sections_by_frame, refs, tracks_df, prefix)
     series.save()
     return renamed

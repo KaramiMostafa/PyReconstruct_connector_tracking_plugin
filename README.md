@@ -88,17 +88,68 @@ pip install -e .
 The customized PyReconstruct Plug-In menu now contains a guided **Multiplex RNA mapping** workflow:
 
 1. **Import DAPI/RNA ROI folders** imports ImageJ `.roi` files or ROI ZIPs into the open series. A folder or filename must contain `Section N` or `Sec N` so it cannot confuse, for example, section 3 with section 39. Imported objects receive stable content-hash identities instead of order-dependent ZIP indexes.
-2. **Track DAPI nuclei** with the Hungarian or Bayesian command. Set the optional source prefix to `dapi_` (or use the DAPI object group), and use a tracked output prefix such as `cell_`. This keeps anchor RNA traces out of the tracking input.
-3. **Map RNA through DAPI tracks** with windows such as `1:2-5;6:7-18;19:20-29;40:30-39`. Anchor RNA is associated with a containing/nearby tracked DAPI nucleus. The same DAPI identity on each target section constrains a local inverse-distance-weighted deformation field, so identity comes from tracking while geometry follows nearby tissue deformation.
-4. **Review mapped RNA** filters the PyReconstruct view to all mappings, high-confidence mappings, or mappings that need review.
+2. **Track DAPI nuclei** with the Hungarian or Bayesian command. Set the optional source prefix to `dapi_` (or use the DAPI object group), and use a tracked output prefix such as `cell_`. This keeps anchor RNA traces out of the tracking input. The current Hungarian connector compares aligned ROI centroids and polygon areas, performs one-to-one augmented Hungarian assignment, and writes the persistent TrackID into the trace name.
+3. **Map mRNA through DAPI tracks** with the corrected default windows `1:2-3;6:4-14;23:15-31;40:32-39`. Anchor mRNA is associated with a containing/nearby tracked DAPI nucleus. The same DAPI identity on each target section constrains a local inverse-distance-weighted deformation field, so identity comes from tracking while geometry follows nearby tissue deformation. If that exact identity is absent but common neighboring DAPI tracks remain, a local-field-only fallback creates a low-confidence ROI for mandatory review instead of silently dropping the cell.
+4. **Review mapped mRNA** filters the PyReconstruct view to all mappings, high-confidence mappings, or mappings that need review.
+5. **Validate against expert ROIs** performs one-to-one centroid matching and reports precision, recall, and F1. These are valid only when the expert ROI set is independent and complete.
+6. **Measure antibody intensity** reads section-labelled antibody TIFFs, measures signal inside mapped mRNA ROIs, and writes measurement/positive-cell CSVs, a scatter plot, overlays, and a JSON summary. Automatic positivity is explicitly labelled exploratory.
+
+### Fiji-style layers and expert feedback
+
+`Plug-In > Channels / overlays > ROI Manager-style layers and labels` provides
+Show All/Show None behavior plus separate DAPI, tracked-DAPI, anchor-mRNA, and
+mapped-mRNA layer presets. ROI names can be drawn over visible traces.
+
+`Plug-In > ⚠ Expert feedback (HIGH RISK)` records three correction types:
+
+- anchor mRNA ↔ DAPI association;
+- DAPI track link between two sections;
+- mapped mRNA ROI approval/rejection.
+
+Every feedback dialog begins with a warning and requires an explicit
+acknowledgement. Corrections are stored beside the `.jser` as
+`<series>.multiplex_feedback.json`; source ROI geometry is not overwritten.
+When “Apply saved expert feedback” is enabled, RNA association feedback
+forces/excludes the reviewed pair and tracking feedback splits or joins the
+reviewed target-side trajectory. This is deterministic constrained correction,
+not automatic neural-network retraining from a single click. The review-report
+command exports separate ROI inventories and DAPI trace-line plots so the
+record remains auditable.
 
 The mapper writes mapped traces back into the series and produces:
 
 - `multiplex_rna_mapping.csv`, including source identity, anchor/target sections, DAPI TrackID, association method, residual, confidence, and review status;
 - `multiplex_rna_mapping_summary.json`;
-- one QC plot per mapped target section under `mapping_qc/`.
+- one QC plot per requested target section under `mapping_qc/`.
 
-Users can create DAPI and RNA traces with the existing U-Net/Cellpose-SAM commands by choosing distinct prefixes (for example `dapi_` and `rna_`), import existing Fiji ROI folders, or combine those approaches. Raw image folders should first be opened as a PyReconstruct series so channel geometry and section transforms remain authoritative.
+Missing sections, missing anchor ROIs, and target sections without tracked DAPI
+are skipped instead of aborting the run. They are listed in the summary JSON,
+and their QC plots contain a diagnostic note. The CSV and summary JSON are
+still created even when no RNA trace can be mapped.
+
+Users can create DAPI and mRNA traces with the existing U-Net/Cellpose-SAM
+commands by choosing distinct prefixes (for example `dapi_` and `rna_`), import
+existing Fiji ROI folders, or combine those approaches. Raw image folders
+should first be opened as a PyReconstruct series so channel geometry and
+section transforms remain authoritative.
+
+### Current in-app DAPI tracking
+
+`Plug-In > Tracking > Hungarian Tracking` uses the existing simple Hungarian
+tracking core. For every closed DAPI trace selected by prefix/group, the
+connector applies the PyReconstruct section transform and records the aligned
+centroid and polygon area. Between successive sections that actually contain
+selected DAPI traces, the current cost is a robustly normalized combination of
+centroid distance (weight 0.2) and relative area difference (weight 0.1).
+Augmented Hungarian assignment then chooses one-to-one matches while allowing
+births and deaths (cost 0.6); assignments above 0.95 are rejected. Matched
+traces are renamed `cell_<TrackID>`.
+
+Empty or unavailable slices are ignored, so the tracker directly compares the
+nearest available DAPI-bearing sections on either side of a gap. The current
+simple configuration does not use image intensity, a learned appearance
+embedding, cell division, or a motion model. Its output should therefore be
+reviewed, especially across large gaps or strong tissue deformation.
 
 ### Command line
 

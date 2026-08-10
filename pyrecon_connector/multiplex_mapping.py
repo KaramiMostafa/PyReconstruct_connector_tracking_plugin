@@ -17,6 +17,24 @@ MAPPED_GROUP = "multiplex_mapped_rna"
 REVIEW_GROUP = "multiplex_mapping_review"
 HIGH_CONFIDENCE_GROUP = "multiplex_mapping_high_confidence"
 
+MAPPING_CSV_FIELDS = [
+    "source_uid",
+    "anchor_section",
+    "target_section",
+    "source_rna_name",
+    "dapi_track_name",
+    "mapped_name",
+    "association_method",
+    "association_distance",
+    "feedback_applied",
+    "mapping_mode",
+    "target_track_available",
+    "common_neighbor_tracks",
+    "local_displacement_residual",
+    "confidence",
+    "status",
+]
+
 
 @dataclass
 class _TraceRecord:
@@ -157,6 +175,32 @@ def _associate_rna_to_dapi(rna: _TraceRecord, dapi: List[_TraceRecord], max_dist
     return record, distance, bool(contained)
 
 
+def _associate_with_constraints(
+    rna: _TraceRecord,
+    dapi: List[_TraceRecord],
+    max_distance: float,
+    constraints: dict,
+):
+    entry = constraints.get(rna.name, {})
+    forced = set(entry.get("correct", set()))
+    excluded = set(entry.get("incorrect", set()))
+    by_name = {record.name: record for record in dapi}
+    available_forced = sorted(forced & set(by_name))
+    if len(available_forced) > 1:
+        raise ValueError(
+            f"RNA '{rna.name}' has multiple DAPI pairs marked correct: {', '.join(available_forced)}."
+        )
+    if available_forced:
+        record = by_name[available_forced[0]]
+        distance = float(np.linalg.norm(record.centroid - rna.centroid))
+        return record, distance, _point_in_polygon(record.centroid, rna.aligned_points), True
+    candidates = [record for record in dapi if record.name not in excluded]
+    association = _associate_rna_to_dapi(rna, candidates, max_distance)
+    if association is None:
+        return None
+    return (*association, bool(excluded))
+
+
 def _stable_mapped_name(prefix: str, anchor: int, rna: _TraceRecord) -> Tuple[str, str]:
     raw = f"{anchor}|{rna.name}|{rna.ordinal}|{rna.centroid[0]:.6f}|{rna.centroid[1]:.6f}"
     uid = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
@@ -188,8 +232,12 @@ def _mapping_geometry(
 
     if len(origins):
         field = _idw_displacement(rna.aligned_points, origins, displacements, neighbor_count)
-        at_source = _idw_displacement(source_dapi.centroid[None, :], origins, displacements, neighbor_count)[0]
-        mapped = rna.aligned_points + field + (associated_disp - at_source)[None, :]
+        at_rna = _idw_displacement(rna.centroid[None, :], origins, displacements, neighbor_count)[0]
+        # Preserve local deformation across the polygon while anchoring its centroid
+        # to the reviewed DAPI identity's displacement.
+        mapped = rna.aligned_points + field + (associated_disp - at_rna)[None, :]
+        desired_centroid = rna.centroid + associated_disp
+        mapped += (desired_centroid - _polygon_centroid(mapped))[None, :]
         nearest = np.argsort(np.linalg.norm(origins - source_dapi.centroid[None, :], axis=1))[:max(1, min(neighbor_count, len(origins)))]
         residual = float(np.median(np.linalg.norm(displacements[nearest] - associated_disp[None, :], axis=1)))
     else:
@@ -198,35 +246,93 @@ def _mapping_geometry(
     return mapped, len(common), residual
 
 
-def _write_qc_plots(output_dir: Path, rows: List[dict], polygons: Dict[Tuple[int, str], np.ndarray], dapi_points: Dict[int, np.ndarray]):
+def _mapping_geometry_from_field(
+    rna: _TraceRecord,
+    source_dapi_by_name: Dict[str, _TraceRecord],
+    target_dapi_by_name: Dict[str, _TraceRecord],
+    neighbor_count: int,
+):
+    """Map by the local DAPI field when the RNA-associated identity is absent."""
+    common = sorted(set(source_dapi_by_name) & set(target_dapi_by_name))
+    if not common:
+        return None
+    origins = np.asarray([source_dapi_by_name[name].centroid for name in common], dtype=float)
+    displacements = np.asarray([
+        target_dapi_by_name[name].centroid - source_dapi_by_name[name].centroid for name in common
+    ], dtype=float)
+    field = _idw_displacement(rna.aligned_points, origins, displacements, neighbor_count)
+    nearest = np.argsort(np.linalg.norm(origins - rna.centroid[None, :], axis=1))[
+        :max(1, min(neighbor_count, len(origins)))
+    ]
+    center = np.median(displacements[nearest], axis=0)
+    residual = float(np.median(np.linalg.norm(displacements[nearest] - center[None, :], axis=1)))
+    return rna.aligned_points + field, len(common), residual
+
+
+def _write_qc_plots(
+    output_dir: Path,
+    rows: List[dict],
+    polygons: Dict[Tuple[int, str], np.ndarray],
+    dapi_points: Dict[int, np.ndarray],
+    requested_sections: Iterable[int] = (),
+    section_notes: Dict[int, List[str]] | None = None,
+) -> List[str]:
+    plot_dir = output_dir / "mapping_qc"
+    plot_dir.mkdir(parents=True, exist_ok=True)
     try:
         import matplotlib
         matplotlib.use("Agg")
         from matplotlib import pyplot as plt
         from matplotlib.patches import Polygon
     except Exception:
-        return
+        return []
 
-    plot_dir = output_dir / "mapping_qc"
-    plot_dir.mkdir(parents=True, exist_ok=True)
-    for section_num in sorted({int(row["target_section"]) for row in rows}):
+    notes = section_notes or {}
+    sections = {int(value) for value in requested_sections}
+    sections.update(int(row["target_section"]) for row in rows)
+    sections.update(int(value) for value in dapi_points)
+    written: List[str] = []
+    for section_num in sorted(sections):
         section_rows = [row for row in rows if int(row["target_section"]) == section_num]
         fig, ax = plt.subplots(figsize=(9, 9), dpi=150)
         points = dapi_points.get(section_num, np.zeros((0, 2)))
         if len(points):
             ax.scatter(points[:, 0], points[:, 1], s=5, color="#777777", alpha=0.5, label="DAPI")
         for row in section_rows:
-            poly = polygons[(section_num, row["mapped_name"])]
-            color = "#28c76f" if row["status"] == "high_confidence" else "#ff9f43"
+            poly = polygons.get((section_num, row["mapped_name"]))
+            if poly is None:
+                continue
+            colors = {
+                "high_confidence": "#28c76f",
+                "expert_approved": "#28c76f",
+                "review": "#ff9f43",
+                "expert_rejected": "#e63c3c",
+            }
+            color = colors.get(row["status"], "#ff9f43")
             ax.add_patch(Polygon(poly, closed=True, fill=False, edgecolor=color, linewidth=0.8))
+        section_messages = list(dict.fromkeys(notes.get(section_num, [])))
+        if section_messages:
+            ax.text(
+                0.5, 0.03, "\n".join(section_messages),
+                transform=ax.transAxes, ha="center", va="bottom", fontsize=9,
+                color="#b23a2b", bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "#dddddd"},
+            )
+        if not len(points) and not section_rows:
+            ax.text(
+                0.5, 0.5, "No mapping geometry available",
+                transform=ax.transAxes, ha="center", va="center", fontsize=12, color="#666666",
+            )
         ax.set_aspect("equal")
         ax.invert_yaxis()
         ax.set_title(f"Section {section_num}: mapped RNA ({len(section_rows)})")
         ax.set_xlabel("Aligned X")
         ax.set_ylabel("Aligned Y")
         fig.tight_layout()
-        fig.savefig(plot_dir / f"section_{section_num:03d}_mapping.png")
+        plot_path = plot_dir / f"section_{section_num:03d}_mapping.png"
+        fig.savefig(plot_path)
         plt.close(fig)
+        written.append(str(plot_path))
+    return written
 
 
 def run_multiplex_rna_mapping(
@@ -242,6 +348,7 @@ def run_multiplex_rna_mapping(
     neighbor_count: int = 7,
     high_confidence_threshold: float = 0.70,
     overwrite: bool = False,
+    apply_feedback: bool = True,
 ) -> dict:
     """Associate anchor RNA traces with tracked DAPI and map them to target sections."""
     windows = parse_mapping_windows(mapping_windows) if isinstance(mapping_windows, str) else mapping_windows
@@ -252,48 +359,150 @@ def run_multiplex_rna_mapping(
     if not mapped_prefix:
         raise ValueError("Provide a mapped RNA name prefix.")
     existing_sections = {int(value) for value in series.sections.keys()}
-    missing = sorted(({int(a) for a in windows} | {int(t) for v in windows.values() for t in v}) - existing_sections)
-    if missing:
-        raise ValueError(f"Sections are not present in the open series: {missing}")
+    requested_anchors = sorted({int(value) for value in windows})
+    requested_targets = sorted({int(target) for values in windows.values() for target in values})
+    missing_series_sections = sorted((set(requested_anchors) | set(requested_targets)) - existing_sections)
 
     rows: List[dict] = []
     mapped_polygons: Dict[Tuple[int, str], np.ndarray] = {}
     dapi_plot_points: Dict[int, np.ndarray] = {}
+    qc_notes: Dict[int, List[str]] = {}
     skipped_unassociated = 0
     skipped_missing_track = 0
+    skipped_anchor_sections: List[dict] = []
+    skipped_target_sections: List[dict] = []
+    processed_anchor_sections: List[int] = []
+    processed_target_sections: set[int] = set()
+    target_sections_without_dapi: set[int] = set()
+    warnings: List[str] = []
+    feedback_payload = {"records": []}
+    feedback_path = ""
+    feedback_applied_count = 0
+    if apply_feedback:
+        try:
+            from .feedback import (
+                association_constraints,
+                feedback_path_for_series,
+                load_feedback,
+                mapped_roi_verdicts,
+            )
+            feedback_payload = load_feedback(series)
+            feedback_path = str(feedback_path_for_series(series))
+        except ValueError:
+            # An unsaved/fake series can still be mapped; it simply has no sidecar.
+            feedback_payload = {"records": []}
+    association_constraints_by_anchor = {}
+    mapped_verdicts = {}
+    if apply_feedback:
+        from .feedback import association_constraints, mapped_roi_verdicts
+        association_constraints_by_anchor = {
+            anchor: association_constraints(feedback_payload, anchor) for anchor in requested_anchors
+        }
+        mapped_verdicts = mapped_roi_verdicts(feedback_payload)
+
+    def skip_target(anchor: int, target: int, reason: str, note: str) -> None:
+        skipped_target_sections.append({
+            "anchor_section": int(anchor),
+            "target_section": int(target),
+            "reason": reason,
+        })
+        qc_notes.setdefault(int(target), []).append(note)
 
     for anchor, targets in windows.items():
+        anchor = int(anchor)
+        targets = [int(value) for value in targets]
+        if anchor not in existing_sections:
+            reason = "section_not_present"
+            skipped_anchor_sections.append({"section": anchor, "reason": reason})
+            warnings.append(f"Anchor section {anchor} is not present and was skipped.")
+            for target_num in targets:
+                target_reason = "target_section_not_present" if target_num not in existing_sections else "anchor_unavailable"
+                note = (
+                    f"Target section {target_num} is not present in the open series."
+                    if target_num not in existing_sections
+                    else f"Anchor section {anchor} is unavailable; no RNA was mapped from it."
+                )
+                skip_target(anchor, target_num, target_reason, note)
+            continue
+
         anchor_dapi = _trace_records(series, anchor, dapi_prefix, dapi_group)
         anchor_rna = _trace_records(series, anchor, rna_prefix, rna_group)
         if not anchor_dapi:
-            raise ValueError(f"No tracked DAPI traces found on anchor section {anchor}.")
+            reason = "no_tracked_dapi"
+            skipped_anchor_sections.append({"section": anchor, "reason": reason})
+            warnings.append(f"Anchor section {anchor} has no tracked DAPI traces and was skipped.")
+            for target_num in targets:
+                skip_target(
+                    anchor, target_num, "anchor_no_tracked_dapi",
+                    f"Anchor section {anchor} has no tracked DAPI traces; no RNA was mapped from it.",
+                )
+            continue
         if not anchor_rna:
-            raise ValueError(f"No RNA traces found on anchor section {anchor}.")
+            reason = "no_rna"
+            skipped_anchor_sections.append({"section": anchor, "reason": reason})
+            warnings.append(f"Anchor section {anchor} has no RNA traces and was skipped.")
+            for target_num in targets:
+                skip_target(
+                    anchor, target_num, "anchor_no_rna",
+                    f"Anchor section {anchor} has no RNA traces; no RNA was mapped from it.",
+                )
+            continue
+        processed_anchor_sections.append(anchor)
         anchor_dapi_by_name = {record.name: record for record in anchor_dapi}
 
         associations = []
         for rna in anchor_rna:
-            association = _associate_rna_to_dapi(rna, anchor_dapi, association_max_distance)
+            association = _associate_with_constraints(
+                rna,
+                anchor_dapi,
+                association_max_distance,
+                association_constraints_by_anchor.get(anchor, {}),
+            )
             if association is None:
                 skipped_unassociated += 1
                 continue
             associations.append((rna, *association))
 
         for target_num in targets:
+            if target_num not in existing_sections:
+                skipped_missing_track += len(associations)
+                skip_target(
+                    anchor, target_num, "target_section_not_present",
+                    f"Target section {target_num} is not present in the open series.",
+                )
+                continue
             target_section = series.loadSection(int(target_num))
             target_dapi = _trace_records(series, target_num, dapi_prefix, dapi_group)
             target_dapi_by_name = {record.name: record for record in target_dapi}
             dapi_plot_points[int(target_num)] = np.asarray([record.centroid for record in target_dapi], dtype=float)
-
-            for rna, source_dapi, association_distance, contained in associations:
-                target_track = target_dapi_by_name.get(source_dapi.name)
-                if target_track is None:
-                    skipped_missing_track += 1
-                    continue
-                mapped_aligned, common_neighbors, residual = _mapping_geometry(
-                    rna, source_dapi, target_track,
-                    anchor_dapi_by_name, target_dapi_by_name, neighbor_count,
+            processed_target_sections.add(int(target_num))
+            if not target_dapi:
+                skipped_missing_track += len(associations)
+                target_sections_without_dapi.add(int(target_num))
+                skip_target(
+                    anchor, target_num, "no_tracked_dapi",
+                    f"Section {target_num} has no tracked DAPI traces matching the selected prefix/group.",
                 )
+                target_section.save(update_series_data=True)
+                continue
+
+            for rna, source_dapi, association_distance, contained, association_feedback in associations:
+                target_track = target_dapi_by_name.get(source_dapi.name)
+                mapping_mode = "tracked_identity_plus_local_field"
+                if target_track is None:
+                    fallback = _mapping_geometry_from_field(
+                        rna, anchor_dapi_by_name, target_dapi_by_name, neighbor_count
+                    )
+                    if fallback is None:
+                        skipped_missing_track += 1
+                        continue
+                    mapped_aligned, common_neighbors, residual = fallback
+                    mapping_mode = "local_field_fallback"
+                else:
+                    mapped_aligned, common_neighbors, residual = _mapping_geometry(
+                        rna, source_dapi, target_track,
+                        anchor_dapi_by_name, target_dapi_by_name, neighbor_count,
+                    )
                 mapped_local = np.asarray(target_section.tform.map(mapped_aligned.tolist(), inverted=True), dtype=float)
                 mapped_name, source_uid = _stable_mapped_name(mapped_prefix, int(anchor), rna)
                 if mapped_name in target_section.contours:
@@ -305,16 +514,35 @@ def run_multiplex_rna_mapping(
                 neighbor_score = min(1.0, common_neighbors / max(1.0, float(neighbor_count)))
                 residual_score = math.exp(-residual / max(float(association_max_distance), 1e-6))
                 confidence = float(0.50 * association_score + 0.20 * neighbor_score + 0.30 * residual_score)
+                if target_track is None:
+                    confidence = min(confidence, float(high_confidence_threshold) - 1e-6)
                 status = "high_confidence" if confidence >= float(high_confidence_threshold) else "review"
+                expert_verdict = mapped_verdicts.get((int(target_num), mapped_name))
+                feedback_applied = bool(association_feedback or expert_verdict)
+                if expert_verdict == "incorrect":
+                    status = "expert_rejected"
+                elif expert_verdict == "correct":
+                    status = "expert_approved"
+                if feedback_applied:
+                    feedback_applied_count += 1
 
                 from PyReconstruct.modules.datatypes import Trace
-                trace = Trace(mapped_name, (40, 200, 100) if status == "high_confidence" else (255, 160, 40), closed=True)
+                colors = {
+                    "high_confidence": (40, 200, 100),
+                    "review": (255, 160, 40),
+                    "expert_approved": (40, 200, 100),
+                    "expert_rejected": (230, 60, 60),
+                }
+                trace = Trace(mapped_name, colors[status], closed=True)
                 trace.points = [tuple(map(float, point)) for point in mapped_local]
                 trace.fill_mode = ("transparent", "unselected")
                 trace.tags.update({MAPPED_GROUP, status, f"anchor_{int(anchor):03d}", f"source_{source_uid}"})
                 target_section.addTrace(trace, log_event=True)
                 series.object_groups.add(MAPPED_GROUP, mapped_name)
-                series.object_groups.add(HIGH_CONFIDENCE_GROUP if status == "high_confidence" else REVIEW_GROUP, mapped_name)
+                series.object_groups.add(
+                    HIGH_CONFIDENCE_GROUP if status in {"high_confidence", "expert_approved"} else REVIEW_GROUP,
+                    mapped_name,
+                )
 
                 mapped_polygons[(int(target_num), mapped_name)] = mapped_aligned
                 rows.append({
@@ -326,6 +554,9 @@ def run_multiplex_rna_mapping(
                     "mapped_name": mapped_name,
                     "association_method": "containment" if contained else "nearest",
                     "association_distance": float(association_distance),
+                    "feedback_applied": feedback_applied,
+                    "mapping_mode": mapping_mode,
+                    "target_track_available": target_track is not None,
                     "common_neighbor_tracks": int(common_neighbors),
                     "local_displacement_residual": float(residual),
                     "confidence": confidence,
@@ -336,10 +567,22 @@ def run_multiplex_rna_mapping(
     series.save()
     summary = {
         "created": len(rows),
-        "high_confidence": sum(row["status"] == "high_confidence" for row in rows),
-        "review": sum(row["status"] == "review" for row in rows),
+        "high_confidence": sum(row["status"] in {"high_confidence", "expert_approved"} for row in rows),
+        "review": sum(row["status"] in {"review", "expert_rejected"} for row in rows),
         "skipped_unassociated": skipped_unassociated,
         "skipped_missing_track": skipped_missing_track,
+        "requested_anchor_sections": requested_anchors,
+        "requested_target_sections": requested_targets,
+        "processed_anchor_sections": sorted(set(processed_anchor_sections)),
+        "processed_target_sections": sorted(processed_target_sections),
+        "missing_series_sections": missing_series_sections,
+        "skipped_anchor_sections": skipped_anchor_sections,
+        "skipped_target_sections": skipped_target_sections,
+        "target_sections_without_dapi": sorted(target_sections_without_dapi),
+        "warnings": warnings,
+        "feedback_enabled": bool(apply_feedback),
+        "feedback_path": feedback_path,
+        "feedback_applied": feedback_applied_count,
     }
 
     if output_dir:
@@ -347,13 +590,25 @@ def run_multiplex_rna_mapping(
         output.mkdir(parents=True, exist_ok=True)
         csv_path = output / "multiplex_rna_mapping.csv"
         with csv_path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()) if rows else ["source_uid"])
+            writer = csv.DictWriter(handle, fieldnames=MAPPING_CSV_FIELDS)
             writer.writeheader()
             writer.writerows(rows)
-        (output / "multiplex_rna_mapping_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-        _write_qc_plots(output, rows, mapped_polygons, dapi_plot_points)
+        plot_paths = _write_qc_plots(
+            output,
+            rows,
+            mapped_polygons,
+            dapi_plot_points,
+            requested_sections=requested_targets,
+            section_notes=qc_notes,
+        )
+        summary_path = output / "multiplex_rna_mapping_summary.json"
         summary["csv"] = str(csv_path)
         summary["qc_dir"] = str(output / "mapping_qc")
+        summary["qc_plots"] = plot_paths
+        summary["summary_json"] = str(summary_path)
+        if requested_targets and not plot_paths:
+            summary["warnings"].append("QC plots could not be generated; check the matplotlib installation.")
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
 

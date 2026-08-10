@@ -8,6 +8,8 @@ import pandas as pd
 from tracking_hungarian.roi import ROIFrameTable
 from tracking_hungarian.pipeline import HungarianConfig, track_series
 
+TRACKED_DAPI_GROUP = "multiplex_tracked_dapi"
+
 
 def _poly_area(pts: List[Tuple[float, float]]) -> float:
     if len(pts) < 3:
@@ -26,7 +28,84 @@ class _Ref:
     trace: object
 
 
-def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefix: str = "cell_", source_prefix: str = "", source_group: str = "") -> int:
+def _nearest_ref_index(frame_refs: List[_Ref], name: str, centroid) -> int | None:
+    exact = [index for index, ref in enumerate(frame_refs) if str(ref.trace.name) == str(name)]
+    candidates = exact or list(range(len(frame_refs)))
+    if not candidates:
+        return None
+    if centroid is None:
+        return candidates[0] if len(candidates) == 1 else None
+    cx, cy = float(centroid[0]), float(centroid[1])
+    return min(
+        candidates,
+        key=lambda index: (
+            float(frame_refs[index].trace.getCentroid()[0]) - cx
+        ) ** 2 + (
+            float(frame_refs[index].trace.getCentroid()[1]) - cy
+        ) ** 2,
+    )
+
+
+def _apply_link_feedback(tracks_df, refs, frame_for_section, records) -> int:
+    """Apply explicit link/unlink constraints to the computed TrackIDs."""
+    applied = 0
+    next_track_id = int(tracks_df["TrackID"].max()) + 1
+    for record in records:
+        source_frame = frame_for_section.get(int(record.get("section", -1)))
+        target_frame = frame_for_section.get(int(record.get("secondary_section", -1)))
+        if source_frame is None or target_frame is None or source_frame == target_frame:
+            continue
+        if source_frame > target_frame:
+            source_frame, target_frame = target_frame, source_frame
+            source_name, target_name = record.get("secondary_name"), record.get("primary_name")
+            source_centroid, target_centroid = record.get("secondary_centroid"), record.get("primary_centroid")
+        else:
+            source_name, target_name = record.get("primary_name"), record.get("secondary_name")
+            source_centroid, target_centroid = record.get("primary_centroid"), record.get("secondary_centroid")
+        source_label = _nearest_ref_index(refs[source_frame], source_name, source_centroid)
+        target_label = _nearest_ref_index(refs[target_frame], target_name, target_centroid)
+        if source_label is None or target_label is None:
+            continue
+        source_rows = tracks_df[
+            (tracks_df["FrameID"] == source_frame) & (tracks_df["Label"] == source_label)
+        ]
+        target_rows = tracks_df[
+            (tracks_df["FrameID"] == target_frame) & (tracks_df["Label"] == target_label)
+        ]
+        if source_rows.empty or target_rows.empty:
+            continue
+        source_tid = int(source_rows.iloc[0]["TrackID"])
+        target_tid = int(target_rows.iloc[0]["TrackID"])
+        verdict = str(record.get("verdict"))
+        if verdict == "incorrect" and source_tid == target_tid:
+            mask = (tracks_df["TrackID"] == target_tid) & (tracks_df["FrameID"] >= target_frame)
+            tracks_df.loc[mask, "TrackID"] = next_track_id
+            next_track_id += 1
+            applied += 1
+        elif verdict == "correct" and source_tid != target_tid:
+            # Merge the target-side segment only, avoiding changes to earlier reviewed sections.
+            mask = (tracks_df["TrackID"] == target_tid) & (tracks_df["FrameID"] >= target_frame)
+            occupied = set(
+                tracks_df.loc[
+                    (tracks_df["TrackID"] == source_tid) & (tracks_df["FrameID"] >= target_frame),
+                    "FrameID",
+                ].astype(int)
+            )
+            mask &= ~tracks_df["FrameID"].isin(occupied)
+            tracks_df.loc[mask, "TrackID"] = source_tid
+            applied += 1
+    return applied
+
+
+def run_hungarian_tracking_on_series(
+    series,
+    start_sec: int,
+    end_sec: int,
+    prefix: str = "cell_",
+    source_prefix: str = "",
+    source_group: str = "",
+    apply_feedback: bool = True,
+) -> int:
     sec_nums = [s for s in sorted(series.sections.keys()) if start_sec <= s <= end_sec]
     if len(sec_nums) < 2:
         raise ValueError("Need at least 2 sections in range.")
@@ -80,6 +159,18 @@ def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefi
     tbl = ROIFrameTable(df)
     cfg = HungarianConfig()
     tracks_df = track_series(tbl, cfg)
+    if apply_feedback:
+        try:
+            from .feedback import dapi_link_constraints, load_feedback
+            records = dapi_link_constraints(load_feedback(series))
+            _apply_link_feedback(
+                tracks_df,
+                refs,
+                {section_num: frame for frame, section_num in enumerate(sec_nums)},
+                records,
+            )
+        except ValueError:
+            pass
 
     renamed = 0
     for frame_idx, sub in tracks_df.groupby("FrameID"):
@@ -90,6 +181,8 @@ def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefi
             tid = int(r.TrackID)
             new_name = f"{prefix}{tid:05d}"
             ref = refs[int(frame_idx)][idx]
+            old_name = str(ref.trace.name)
+            old_groups = set(series.object_groups.getObjectGroups(old_name))
 
             section.editTraceAttributes(
                 traces=[ref.trace],
@@ -100,6 +193,9 @@ def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefi
                 add_tags=False,
                 log_event=True,
             )
+            series.object_groups.add(TRACKED_DAPI_GROUP, new_name)
+            for group in old_groups:
+                series.object_groups.add(group, new_name)
             renamed += 1
 
         section.save(update_series_data=True)

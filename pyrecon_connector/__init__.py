@@ -28,6 +28,36 @@ def import_multiplex_roi_folders(*args, **kwargs):
     return _run(*args, **kwargs)
 
 
+def add_feedback_record(*args, **kwargs):
+    from .feedback import add_feedback_record as _run
+    return _run(*args, **kwargs)
+
+
+def feedback_summary(*args, **kwargs):
+    from .feedback import feedback_summary as _run
+    return _run(*args, **kwargs)
+
+
+def export_feedback_csv(*args, **kwargs):
+    from .feedback import export_feedback_csv as _run
+    return _run(*args, **kwargs)
+
+
+def write_feedback_review(*args, **kwargs):
+    from .feedback import write_feedback_review as _run
+    return _run(*args, **kwargs)
+
+
+def validate_mapped_rna(*args, **kwargs):
+    from .multiplex_analysis import validate_mapped_rna as _run
+    return _run(*args, **kwargs)
+
+
+def measure_antibody_intensity(*args, **kwargs):
+    from .multiplex_analysis import measure_antibody_intensity as _run
+    return _run(*args, **kwargs)
+
+
 __all__ = [
     "run_hungarian_tracking_on_series",
     "run_bayesian_tracking_on_series",
@@ -35,4 +65,10 @@ __all__ = [
     "run_cellpose_sam_segmentation_on_section",
     "run_multiplex_rna_mapping",
     "import_multiplex_roi_folders",
+    "add_feedback_record",
+    "feedback_summary",
+    "export_feedback_csv",
+    "write_feedback_review",
+    "validate_mapped_rna",
+    "measure_antibody_intensity",
 ]

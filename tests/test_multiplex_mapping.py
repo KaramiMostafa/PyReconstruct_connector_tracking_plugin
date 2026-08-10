@@ -2,6 +2,7 @@ import sys
 import tempfile
 import types
 import unittest
+import json
 from unittest.mock import patch
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from pyrecon_connector.multiplex_mapping import (
     parse_mapping_windows,
     run_multiplex_rna_mapping,
 )
+from pyrecon_connector.feedback import add_feedback_record
 
 
 class FakeTrace:
@@ -160,13 +162,101 @@ class MultiplexMappingTests(unittest.TestCase):
     def test_skips_when_tracked_dapi_is_absent_on_target(self):
         series = FakeSeries({
             1: FakeSection(1, [square("cell_00001", 10, 10, 1), square("rna_001", 10, 10, 3)]),
-            2: FakeSection(2, [square("cell_other", 15, 10, 1)]),
+            2: FakeSection(2, [square("other_00001", 15, 10, 1)]),
         })
 
         result = run_multiplex_rna_mapping(series, "1:2", association_max_distance=10)
 
         self.assertEqual(result["created"], 0)
         self.assertEqual(result["skipped_missing_track"], 1)
+        self.assertEqual(result["target_sections_without_dapi"], [2])
+
+    def test_uses_review_fallback_when_associated_track_is_missing(self):
+        series = FakeSeries({
+            1: FakeSection(1, [
+                square("cell_00001", 10, 10, 1),
+                square("cell_00002", 30, 10, 1),
+                square("rna_001", 10, 10, 3),
+            ]),
+            2: FakeSection(2, [square("cell_00002", 35, 13, 1)]),
+        })
+
+        result = run_multiplex_rna_mapping(series, "1:2", association_max_distance=10)
+
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["review"], 1)
+        mapped = [
+            trace for name, contour in series.loadSection(2).contours.items()
+            if name.startswith("mapped_rna_") for trace in contour.traces
+        ][0]
+        np.testing.assert_allclose(_polygon_centroid(np.asarray(mapped.points)), [15.0, 13.0])
+
+    def test_correct_pair_feedback_forces_reviewed_dapi_identity(self):
+        source_1 = square("cell_00001", 10, 10, 1)
+        source_2 = square("cell_00002", 30, 10, 1)
+        rna = square("rna_001", 10, 10, 3)
+        series = FakeSeries({
+            1: FakeSection(1, [source_1, source_2, rna]),
+            2: FakeSection(2, [
+                square("cell_00001", 15, 10, 1),
+                square("cell_00002", 40, 10, 1),
+            ]),
+        })
+        with tempfile.TemporaryDirectory() as folder:
+            series.jser_fp = str(Path(folder) / "sample.jser")
+            add_feedback_record(
+                series, "rna_dapi_pair", "correct", 1, rna, secondary_trace=source_2
+            )
+            result = run_multiplex_rna_mapping(
+                series, "1:2", association_max_distance=10, apply_feedback=True
+            )
+
+        self.assertEqual(result["feedback_applied"], 1)
+        mapped = [
+            trace for name, contour in series.loadSection(2).contours.items()
+            if name.startswith("mapped_rna_") for trace in contour.traces
+        ][0]
+        np.testing.assert_allclose(_polygon_centroid(np.asarray(mapped.points)), [20.0, 10.0])
+
+    def test_missing_target_sections_are_skipped_and_receive_qc_plots(self):
+        series = FakeSeries({
+            1: FakeSection(1, [square("cell_00001", 10, 10, 1), square("rna_001", 10, 10, 3)]),
+            2: FakeSection(2, [square("cell_00001", 15, 12, 1)]),
+        })
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            result = run_multiplex_rna_mapping(
+                series,
+                "1:2-4",
+                association_max_distance=10,
+                output_dir=output_dir,
+            )
+
+            self.assertEqual(result["created"], 1)
+            self.assertEqual(result["missing_series_sections"], [3, 4])
+            self.assertEqual(
+                [item["target_section"] for item in result["skipped_target_sections"]],
+                [3, 4],
+            )
+            for section_num in (2, 3, 4):
+                self.assertTrue(
+                    (Path(result["qc_dir"]) / f"section_{section_num:03d}_mapping.png").is_file()
+                )
+
+    def test_missing_anchor_still_saves_empty_results_and_diagnostic_plot(self):
+        series = FakeSeries({2: FakeSection(2, [square("cell_00001", 15, 12, 1)])})
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            result = run_multiplex_rna_mapping(series, "1:2", output_dir=output_dir)
+
+            self.assertEqual(result["created"], 0)
+            self.assertEqual(result["missing_series_sections"], [1])
+            self.assertEqual(result["skipped_anchor_sections"], [{"section": 1, "reason": "section_not_present"}])
+            self.assertTrue(Path(result["csv"]).is_file())
+            self.assertTrue(Path(result["summary_json"]).is_file())
+            self.assertTrue((Path(result["qc_dir"]) / "section_002_mapping.png").is_file())
+            summary = json.loads(Path(result["summary_json"]).read_text(encoding="utf-8"))
+            self.assertIn("Anchor section 1 is not present and was skipped.", summary["warnings"])
 
     def test_requires_explicit_dapi_and_rna_selectors(self):
         series = FakeSeries({1: FakeSection(1, []), 2: FakeSection(2, [])})
