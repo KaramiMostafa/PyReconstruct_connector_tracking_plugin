@@ -1,0 +1,28 @@
+name: Conventional Commits
+
+on:
+  pull_request:
+  push:
+    branches:
+      - cellpose-custom-model
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate customized commit subjects
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch origin "${{ github.base_ref }}"
+            base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          else
+            base=$(git merge-base origin/main HEAD)
+          fi
+          python3 scripts/check_conventional_commits.py --range "$base..HEAD"
