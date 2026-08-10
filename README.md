@@ -83,6 +83,23 @@ pip install -e .
 
 ## Usage
 
+### Multiplex RNA mapping in PyReconstruct
+
+The customized PyReconstruct Plug-In menu now contains a guided **Multiplex RNA mapping** workflow:
+
+1. **Import DAPI/RNA ROI folders** imports ImageJ `.roi` files or ROI ZIPs into the open series. A folder or filename must contain `Section N` or `Sec N` so it cannot confuse, for example, section 3 with section 39. Imported objects receive stable content-hash identities instead of order-dependent ZIP indexes.
+2. **Track DAPI nuclei** with the Hungarian or Bayesian command. Set the optional source prefix to `dapi_` (or use the DAPI object group), and use a tracked output prefix such as `cell_`. This keeps anchor RNA traces out of the tracking input.
+3. **Map RNA through DAPI tracks** with windows such as `1:2-5;6:7-18;19:20-29;40:30-39`. Anchor RNA is associated with a containing/nearby tracked DAPI nucleus. The same DAPI identity on each target section constrains a local inverse-distance-weighted deformation field, so identity comes from tracking while geometry follows nearby tissue deformation.
+4. **Review mapped RNA** filters the PyReconstruct view to all mappings, high-confidence mappings, or mappings that need review.
+
+The mapper writes mapped traces back into the series and produces:
+
+- `multiplex_rna_mapping.csv`, including source identity, anchor/target sections, DAPI TrackID, association method, residual, confidence, and review status;
+- `multiplex_rna_mapping_summary.json`;
+- one QC plot per mapped target section under `mapping_qc/`.
+
+Users can create DAPI and RNA traces with the existing U-Net/Cellpose-SAM commands by choosing distinct prefixes (for example `dapi_` and `rna_`), import existing Fiji ROI folders, or combine those approaches. Raw image folders should first be opened as a PyReconstruct series so channel geometry and section transforms remain authoritative.
+
 ### Command line
 
 ```bash

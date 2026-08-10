@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
     name="pyrecon-cell-tracker",
-    version="0.3.0",
-    description="PyReconstruct plugins for tracking and segmentation",
+    version="0.4.0",
+    description="PyReconstruct plugins for tracking, segmentation, and multiplex RNA mapping",
     author="Mostafa Karami",
     packages=find_packages(),
     py_modules=["run_plugin"],

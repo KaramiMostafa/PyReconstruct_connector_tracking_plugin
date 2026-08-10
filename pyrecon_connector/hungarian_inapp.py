@@ -26,7 +26,7 @@ class _Ref:
     trace: object
 
 
-def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefix: str = "cell_") -> int:
+def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefix: str = "cell_", source_prefix: str = "", source_group: str = "") -> int:
     sec_nums = [s for s in sorted(series.sections.keys()) if start_sec <= s <= end_sec]
     if len(sec_nums) < 2:
         raise ValueError("Need at least 2 sections in range.")
@@ -43,8 +43,13 @@ def run_hungarian_tracking_on_series(series, start_sec: int, end_sec: int, prefi
         frame_refs: List[_Ref] = []
         local_label = 0
 
+        allowed = set(series.object_groups.getGroupObjects(source_group)) if source_group else None
         for cname, contour in section.contours.items():
             if cname == "domain1":
+                continue
+            if source_prefix and not str(cname).startswith(source_prefix):
+                continue
+            if allowed is not None and cname not in allowed:
                 continue
             for tr in contour.traces:
                 if (not tr.closed) or (len(tr.points) < 3):

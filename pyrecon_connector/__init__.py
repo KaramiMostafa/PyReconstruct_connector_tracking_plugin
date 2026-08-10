@@ -18,9 +18,21 @@ def run_cellpose_sam_segmentation_on_section(*args, **kwargs):
     return _run(*args, **kwargs)
 
 
+def run_multiplex_rna_mapping(*args, **kwargs):
+    from .multiplex_mapping import run_multiplex_rna_mapping as _run
+    return _run(*args, **kwargs)
+
+
+def import_multiplex_roi_folders(*args, **kwargs):
+    from .multiplex_mapping import import_multiplex_roi_folders as _run
+    return _run(*args, **kwargs)
+
+
 __all__ = [
     "run_hungarian_tracking_on_series",
     "run_bayesian_tracking_on_series",
     "run_unet_segmentation_on_section",
     "run_cellpose_sam_segmentation_on_section",
+    "run_multiplex_rna_mapping",
+    "import_multiplex_roi_folders",
 ]

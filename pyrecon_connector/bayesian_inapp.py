@@ -51,7 +51,7 @@ def _parse_idx(token: str) -> int:
     return int(str(token).split("_")[1])
 
 
-def _make_feature_table(series, sec_nums: List[int]):
+def _make_feature_table(series, sec_nums: List[int], source_prefix: str = "", source_group: str = ""):
     rows = []
     refs: Dict[int, List[_Ref]] = {}
     sections_by_frame: Dict[int, object] = {}
@@ -63,8 +63,13 @@ def _make_feature_table(series, sec_nums: List[int]):
         frame_refs: List[_Ref] = []
         local_label = 0
 
+        allowed = set(series.object_groups.getGroupObjects(source_group)) if source_group else None
         for cname, contour in section.contours.items():
             if cname == "domain1":
+                continue
+            if source_prefix and not str(cname).startswith(source_prefix):
+                continue
+            if allowed is not None and cname not in allowed:
                 continue
             for tr in contour.traces:
                 if (not tr.closed) or (len(tr.points) < 3):
@@ -198,12 +203,12 @@ def _load_or_train_model(df: pd.DataFrame, frame_ids: List[int], model_path: str
     return model, mean, std, features
 
 
-def run_bayesian_tracking_on_series(series, start_sec: int, end_sec: int, prefix: str = "bt_cell_", model_path: str | None = None, train_epochs: int = 20, motion_threshold: float = 200.0) -> int:
+def run_bayesian_tracking_on_series(series, start_sec: int, end_sec: int, prefix: str = "bt_cell_", model_path: str | None = None, train_epochs: int = 20, motion_threshold: float = 200.0, source_prefix: str = "", source_group: str = "") -> int:
     sec_nums = [s for s in sorted(series.sections.keys()) if int(start_sec) <= s <= int(end_sec)]
     if len(sec_nums) < 2:
         raise ValueError("Need at least 2 sections in range.")
 
-    df, refs, sections_by_frame = _make_feature_table(series, sec_nums)
+    df, refs, sections_by_frame = _make_feature_table(series, sec_nums, source_prefix, source_group)
     if df.empty:
         raise ValueError("No closed traces found in selected range.")
 
