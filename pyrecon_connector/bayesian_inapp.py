@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 
 from tracking_BayesianTransformer import BayesianTransformerForCellTracking, train_bnn, load_model, match_pair
-from .hungarian_inapp import TRACKED_DAPI_GROUP, _apply_link_feedback
+from .hungarian_inapp import (
+    TRACKED_DAPI_GROUP,
+    _apply_link_feedback,
+    _trace_matches_source_group,
+)
 
 
 def _poly_area(pts: List[Tuple[float, float]]) -> float:
@@ -73,6 +77,8 @@ def _make_feature_table(series, sec_nums: List[int], source_prefix: str = "", so
             if allowed is not None and cname not in allowed:
                 continue
             for tr in contour.traces:
+                if not _trace_matches_source_group(tr, source_group):
+                    continue
                 if (not tr.closed) or (len(tr.points) < 3):
                     continue
                 cx, cy = tr.getCentroid(tform=tform)
@@ -221,7 +227,8 @@ def run_bayesian_tracking_on_series(
     source_prefix: str = "",
     source_group: str = "",
     apply_feedback: bool = True,
-) -> int:
+    return_details: bool = False,
+) -> int | dict:
     sec_nums = [s for s in sorted(series.sections.keys()) if int(start_sec) <= s <= int(end_sec)]
     if len(sec_nums) < 2:
         raise ValueError("Need at least 2 sections in range.")
@@ -242,10 +249,25 @@ def run_bayesian_tracking_on_series(
         if table.at(frame_idx).empty or table.at(frame_idx + 1).empty:
             matches_by_frame[frame_idx] = []
             continue
-        matches, _, _ = match_pair(table, int(frame_idx), model, mean, std, features, motion_threshold=float(motion_threshold))
+        # Full triplet belief propagation scales poorly for microscopy fields
+        # with hundreds of cells and can freeze the host GUI. The bounded mode
+        # retains the Bayesian embedding/uncertainty model while limiting the
+        # spatial graph to single-cell candidates.
+        matches, _, _ = match_pair(
+            table,
+            int(frame_idx),
+            model,
+            mean,
+            std,
+            features,
+            motion_threshold=float(motion_threshold),
+            max_triplet_neighbors=0,
+            belief_max_iter=1,
+        )
         matches_by_frame[frame_idx] = matches
 
     tracks_df = _build_track_table(df, matches_by_frame, frame_ids)
+    feedback_stats = {"evaluated": 0, "applied": 0}
     if apply_feedback:
         try:
             from .feedback import dapi_link_constraints, load_feedback
@@ -254,9 +276,16 @@ def run_bayesian_tracking_on_series(
                 refs,
                 {section_num: frame for frame, section_num in enumerate(sec_nums)},
                 dapi_link_constraints(load_feedback(series)),
+                stats=feedback_stats,
             )
         except ValueError:
             pass
     renamed = _rename_from_tracks(series, sections_by_frame, refs, tracks_df, prefix)
     series.save()
+    if return_details:
+        return {
+            "renamed": renamed,
+            "feedback_evaluated": feedback_stats["evaluated"],
+            "feedback_applied": feedback_stats["applied"],
+        }
     return renamed

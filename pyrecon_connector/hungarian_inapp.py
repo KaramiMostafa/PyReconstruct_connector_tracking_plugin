@@ -9,6 +9,9 @@ from tracking_hungarian.roi import ROIFrameTable
 from tracking_hungarian.pipeline import HungarianConfig, track_series
 
 TRACKED_DAPI_GROUP = "multiplex_tracked_dapi"
+DAPI_GROUPS = {"multiplex_dapi", TRACKED_DAPI_GROUP}
+DAPI_TRACE_TAG = "multiplex_dapi"
+RNA_TRACE_TAGS = {"multiplex_rna_anchor", "multiplex_mapped_rna"}
 
 
 def _poly_area(pts: List[Tuple[float, float]]) -> float:
@@ -26,6 +29,16 @@ def _poly_area(pts: List[Tuple[float, float]]) -> float:
 class _Ref:
     section_num: int
     trace: object
+
+
+def _trace_matches_source_group(trace, source_group: str) -> bool:
+    """Prevent RNA traces sharing a tracked object name from entering DAPI tracking."""
+    if source_group not in DAPI_GROUPS:
+        return True
+    tags = {str(tag) for tag in getattr(trace, "tags", set())}
+    if DAPI_TRACE_TAG in tags:
+        return True
+    return not bool(tags & RNA_TRACE_TAGS)
 
 
 def _nearest_ref_index(frame_refs: List[_Ref], name: str, centroid) -> int | None:
@@ -50,9 +63,10 @@ def _nearest_ref_index(frame_refs: List[_Ref], name: str, centroid) -> int | Non
     return exact[0] if len(exact) == 1 else None
 
 
-def _apply_link_feedback(tracks_df, refs, frame_for_section, records) -> int:
+def _apply_link_feedback(tracks_df, refs, frame_for_section, records, stats=None) -> int:
     """Apply explicit link/unlink constraints to the computed TrackIDs."""
     applied = 0
+    evaluated = 0
     next_track_id = int(tracks_df["TrackID"].max()) + 1
     for record in records:
         source_frame = frame_for_section.get(int(record.get("section", -1)))
@@ -78,6 +92,7 @@ def _apply_link_feedback(tracks_df, refs, frame_for_section, records) -> int:
         ]
         if source_rows.empty or target_rows.empty:
             continue
+        evaluated += 1
         source_tid = int(source_rows.iloc[0]["TrackID"])
         target_tid = int(target_rows.iloc[0]["TrackID"])
         verdict = str(record.get("verdict"))
@@ -105,6 +120,8 @@ def _apply_link_feedback(tracks_df, refs, frame_for_section, records) -> int:
                 tracks_df.loc[target_mask, "TrackID"] = source_tid
                 tracks_df.loc[source_mask, "TrackID"] = target_tid
                 applied += 1
+    if stats is not None:
+        stats.update({"evaluated": evaluated, "applied": applied})
     return applied
 
 
@@ -116,7 +133,8 @@ def run_hungarian_tracking_on_series(
     source_prefix: str = "",
     source_group: str = "",
     apply_feedback: bool = True,
-) -> int:
+    return_details: bool = False,
+) -> int | dict:
     sec_nums = [s for s in sorted(series.sections.keys()) if start_sec <= s <= end_sec]
     if len(sec_nums) < 2:
         raise ValueError("Need at least 2 sections in range.")
@@ -142,6 +160,8 @@ def run_hungarian_tracking_on_series(
             if allowed is not None and cname not in allowed:
                 continue
             for tr in contour.traces:
+                if not _trace_matches_source_group(tr, source_group):
+                    continue
                 if (not tr.closed) or (len(tr.points) < 3):
                     continue
 
@@ -170,6 +190,7 @@ def run_hungarian_tracking_on_series(
     tbl = ROIFrameTable(df)
     cfg = HungarianConfig()
     tracks_df = track_series(tbl, cfg)
+    feedback_stats = {"evaluated": 0, "applied": 0}
     if apply_feedback:
         try:
             from .feedback import dapi_link_constraints, load_feedback
@@ -179,6 +200,7 @@ def run_hungarian_tracking_on_series(
                 refs,
                 {section_num: frame for frame, section_num in enumerate(sec_nums)},
                 records,
+                stats=feedback_stats,
             )
         except ValueError:
             pass
@@ -211,4 +233,10 @@ def run_hungarian_tracking_on_series(
 
         section.save(update_series_data=True)
 
+    if return_details:
+        return {
+            "renamed": renamed,
+            "feedback_evaluated": feedback_stats["evaluated"],
+            "feedback_applied": feedback_stats["applied"],
+        }
     return renamed

@@ -2,13 +2,19 @@ import unittest
 
 import pandas as pd
 
-from pyrecon_connector.hungarian_inapp import _Ref, _apply_link_feedback, _nearest_ref_index
+from pyrecon_connector.hungarian_inapp import (
+    _Ref,
+    _apply_link_feedback,
+    _nearest_ref_index,
+    _trace_matches_source_group,
+)
 
 
 class Trace:
-    def __init__(self, name, x):
+    def __init__(self, name, x, tags=()):
         self.name = name
         self.x = x
+        self.tags = set(tags)
 
     def getCentroid(self):
         return self.x, 0
@@ -26,6 +32,7 @@ class HungarianFeedbackTests(unittest.TestCase):
             1: [_Ref(2, Trace("cell_00001", 1))],
             2: [_Ref(3, Trace("cell_00001", 2))],
         }
+        stats = {}
         applied = _apply_link_feedback(tracks, refs, {1: 0, 2: 1, 3: 2}, [{
             "section": 1,
             "primary_name": "cell_00001",
@@ -34,8 +41,9 @@ class HungarianFeedbackTests(unittest.TestCase):
             "secondary_name": "cell_00001",
             "secondary_centroid": [1, 0],
             "verdict": "incorrect",
-        }])
+        }], stats=stats)
         self.assertEqual(applied, 1)
+        self.assertEqual(stats, {"evaluated": 1, "applied": 1})
         self.assertEqual(tracks["TrackID"].tolist()[0], 1)
         self.assertNotEqual(tracks["TrackID"].tolist()[1], 1)
         self.assertEqual(tracks["TrackID"].tolist()[1], tracks["TrackID"].tolist()[2])
@@ -95,6 +103,12 @@ class HungarianFeedbackTests(unittest.TestCase):
             _Ref(14, Trace("renamed_after_rerun", 10)),
         ]
         self.assertEqual(_nearest_ref_index(refs, "cell_00177", [10, 0]), 1)
+
+    def test_tracked_dapi_source_group_excludes_rna_trace_name_collision(self):
+        dapi = Trace("cell_00168", 0, {"multiplex_dapi"})
+        rna = Trace("cell_00168", 0, {"multiplex_rna_anchor"})
+        self.assertTrue(_trace_matches_source_group(dapi, "multiplex_tracked_dapi"))
+        self.assertFalse(_trace_matches_source_group(rna, "multiplex_tracked_dapi"))
 
 
 if __name__ == "__main__":
