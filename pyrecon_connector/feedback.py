@@ -72,6 +72,82 @@ def _centroid(trace) -> list[float]:
     return [float(x), float(y)]
 
 
+def _endpoint_key(section, name, centroid) -> tuple:
+    values = centroid or (0.0, 0.0)
+    return (
+        int(section),
+        str(name),
+        round(float(values[0]), 6),
+        round(float(values[1]), 6),
+    )
+
+
+def _record_key(record: dict) -> tuple:
+    """Return an identity key; DAPI links are direction-independent."""
+    kind = str(record.get("kind", ""))
+    primary = _endpoint_key(
+        record.get("section", -1),
+        record.get("primary_name", ""),
+        record.get("primary_centroid"),
+    )
+    secondary = _endpoint_key(
+        record.get("secondary_section", -1),
+        record.get("secondary_name", ""),
+        record.get("secondary_centroid"),
+    )
+    if kind == "dapi_track_link":
+        primary, secondary = sorted((primary, secondary))
+    return kind, primary, secondary
+
+
+def _upsert_records(payload: dict, records: list[dict]) -> None:
+    """Replace equivalent assertions, including reversed DAPI link pairs."""
+    for record in records:
+        key = _record_key(record)
+        payload["records"] = [
+            old for old in payload["records"] if _record_key(old) != key
+        ]
+        payload["records"].append(record)
+
+
+def _dapi_link_record(primary: dict, secondary: dict, verdict: str, notes: str) -> dict:
+    if verdict not in VALID_VERDICTS:
+        raise ValueError("Feedback verdict must be 'correct' or 'incorrect'.")
+    if int(primary["section"]) == int(secondary["section"]):
+        raise ValueError("A DAPI track link must connect two different sections.")
+    return {
+        "kind": "dapi_track_link",
+        "verdict": str(verdict),
+        "section": int(primary["section"]),
+        "primary_name": str(primary["name"]),
+        "primary_centroid": [float(value) for value in primary["centroid"]],
+        "secondary_section": int(secondary["section"]),
+        "secondary_name": str(secondary["name"]),
+        "secondary_centroid": [float(value) for value in secondary["centroid"]],
+        "notes": str(notes or ""),
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def add_dapi_link_feedback_batch(
+    series,
+    pairs: list[tuple[dict, dict]],
+    verdict: str,
+    notes: str = "",
+) -> list[dict]:
+    """Save several reviewed DAPI links atomically from the persistent UI."""
+    records = [
+        _dapi_link_record(primary, secondary, str(verdict), notes)
+        for primary, secondary in pairs
+    ]
+    if not records:
+        return []
+    payload = load_feedback(series)
+    _upsert_records(payload, records)
+    save_feedback(series, payload)
+    return records
+
+
 def add_feedback_record(
     series,
     kind: str,
@@ -102,15 +178,82 @@ def add_feedback_record(
         "notes": str(notes or ""),
         "created_utc": datetime.now(timezone.utc).isoformat(),
     }
-    # Replace the same assertion instead of accumulating contradictory stale clicks.
-    key_fields = ("kind", "section", "primary_name", "secondary_section", "secondary_name")
-    payload["records"] = [
-        old for old in payload["records"]
-        if any(old.get(field) != record.get(field) for field in key_fields)
-    ]
-    payload["records"].append(record)
+    _upsert_records(payload, [record])
     save_feedback(series, payload)
     return record
+
+
+def _is_dapi_trace(trace) -> bool:
+    tags = {str(tag) for tag in getattr(trace, "tags", set())}
+    if "multiplex_dapi" in tags:
+        return True
+    return not bool(tags & {"multiplex_rna_anchor", "multiplex_mapped_rna"})
+
+
+def _nearest_named_dapi_endpoint(series, origin_section: int, name: str, direction: int):
+    section_numbers = sorted(int(value) for value in series.sections)
+    candidates = (
+        [value for value in reversed(section_numbers) if value < int(origin_section)]
+        if direction < 0
+        else [value for value in section_numbers if value > int(origin_section)]
+    )
+    for section_num in candidates:
+        section = series.loadSection(section_num)
+        contour = section.contours.get(str(name))
+        if contour is None:
+            continue
+        for trace in contour.traces:
+            if _is_dapi_trace(trace):
+                return {
+                    "section": section_num,
+                    "name": str(name),
+                    "centroid": _centroid(trace),
+                }
+    return None
+
+
+def record_dapi_rename_feedback(
+    series,
+    section: int,
+    old_name: str,
+    new_name: str,
+    centroid,
+) -> dict:
+    """Convert a deliberate tracked-DAPI rename into adjacent link constraints."""
+    if not old_name or not new_name or str(old_name) == str(new_name):
+        return {"correct": 0, "incorrect": 0, "records": []}
+    current = {
+        "section": int(section),
+        "name": str(new_name),
+        "centroid": [float(value) for value in centroid],
+    }
+    assertions = []
+    for direction in (-1, 1):
+        correct = _nearest_named_dapi_endpoint(series, section, new_name, direction)
+        if correct:
+            assertions.append((current, correct, "correct"))
+        incorrect = _nearest_named_dapi_endpoint(series, section, old_name, direction)
+        if incorrect:
+            assertions.append((current, incorrect, "incorrect"))
+
+    records = [
+        _dapi_link_record(
+            primary,
+            secondary,
+            verdict,
+            f"Recorded automatically from manual DAPI rename {old_name} -> {new_name}",
+        )
+        for primary, secondary, verdict in assertions
+    ]
+    if records:
+        payload = load_feedback(series)
+        _upsert_records(payload, records)
+        save_feedback(series, payload)
+    return {
+        "correct": sum(record["verdict"] == "correct" for record in records),
+        "incorrect": sum(record["verdict"] == "incorrect" for record in records),
+        "records": records,
+    }
 
 
 def association_constraints(payload: dict, section: int) -> dict[str, dict[str, set[str]]]:

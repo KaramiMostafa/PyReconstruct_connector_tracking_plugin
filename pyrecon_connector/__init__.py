@@ -33,6 +33,16 @@ def add_feedback_record(*args, **kwargs):
     return _run(*args, **kwargs)
 
 
+def add_dapi_link_feedback_batch(*args, **kwargs):
+    from .feedback import add_dapi_link_feedback_batch as _run
+    return _run(*args, **kwargs)
+
+
+def record_dapi_rename_feedback(*args, **kwargs):
+    from .feedback import record_dapi_rename_feedback as _run
+    return _run(*args, **kwargs)
+
+
 def feedback_summary(*args, **kwargs):
     from .feedback import feedback_summary as _run
     return _run(*args, **kwargs)
@@ -66,6 +76,8 @@ __all__ = [
     "run_multiplex_rna_mapping",
     "import_multiplex_roi_folders",
     "add_feedback_record",
+    "add_dapi_link_feedback_batch",
+    "record_dapi_rename_feedback",
     "feedback_summary",
     "export_feedback_csv",
     "write_feedback_review",
