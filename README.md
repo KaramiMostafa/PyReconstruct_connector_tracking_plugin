@@ -62,8 +62,10 @@ The path must point into this clone.
    `multiplex_dapi` source group so anchor mRNA ROIs cannot enter tracking.
 3. Map anchor mRNA ROIs through the DAPI tracks using
    `multiplex_tracked_dapi` for DAPI and `multiplex_rna_anchor` for mRNA.
-4. Review DAPI and mRNA results separately.
-5. Record expert feedback only after checking both identities and sections.
+4. Review DAPI and mRNA results separately. Tracked DAPI and mapped RNA both
+   support persistent multicolor selection across sections.
+5. Record expert feedback only after checking every selected identity and
+   section. One verdict can be applied to one or more selected mapped RNA ROIs.
 6. Re-run tracking or mapping with **Apply saved expert feedback** enabled.
 7. Optionally validate mapped ROIs and measure antibody intensity.
 

@@ -15,7 +15,10 @@ from pyrecon_connector.multiplex_mapping import (
     parse_mapping_windows,
     run_multiplex_rna_mapping,
 )
-from pyrecon_connector.feedback import add_feedback_record
+from pyrecon_connector.feedback import (
+    add_feedback_record,
+    add_mapped_roi_feedback_batch,
+)
 
 
 class FakeTrace:
@@ -363,6 +366,46 @@ class MultiplexMappingTests(unittest.TestCase):
             if name.startswith("mapped_rna_") for trace in contour.traces
         ][0]
         np.testing.assert_allclose(_polygon_centroid(np.asarray(mapped.points)), [20.0, 10.0])
+
+    def test_batch_mapped_feedback_controls_rerun_status_and_color(self):
+        series = FakeSeries({
+            1: FakeSection(1, [
+                square("cell_00001", 10, 10, 1),
+                square("rna_001", 10, 10, 3),
+            ]),
+            2: FakeSection(2, [square("cell_00001", 15, 12, 1)]),
+        })
+        with tempfile.TemporaryDirectory() as folder:
+            series.jser_fp = str(Path(folder) / "sample.jser")
+            first = run_multiplex_rna_mapping(
+                series, "1:2", association_max_distance=10
+            )
+            mapped = [
+                trace for name, contour in series.loadSection(2).contours.items()
+                if name.startswith("mapped_rna_") for trace in contour.traces
+            ][0]
+            add_mapped_roi_feedback_batch(
+                series,
+                [{
+                    "section": 2,
+                    "name": mapped.name,
+                    "centroid": list(_polygon_centroid(np.asarray(mapped.points))),
+                }],
+                "incorrect",
+            )
+            second = run_multiplex_rna_mapping(
+                series, "1:2", association_max_distance=10, overwrite=True
+            )
+
+        self.assertEqual(first["created"], 1)
+        self.assertEqual(second["created"], 1)
+        self.assertEqual(second["feedback_applied"], 1)
+        remapped = [
+            trace for name, contour in series.loadSection(2).contours.items()
+            if name.startswith("mapped_rna_") for trace in contour.traces
+        ][0]
+        self.assertEqual(remapped.color, (230, 60, 60))
+        self.assertIn("expert_rejected", remapped.tags)
 
     def test_missing_target_sections_are_skipped_and_receive_qc_plots(self):
         series = FakeSeries({

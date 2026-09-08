@@ -6,6 +6,7 @@ from pathlib import Path
 from pyrecon_connector.feedback import (
     add_dapi_link_feedback_batch,
     add_feedback_record,
+    add_mapped_roi_feedback_batch,
     association_constraints,
     export_feedback_csv,
     feedback_summary,
@@ -113,6 +114,29 @@ class FeedbackTests(unittest.TestCase):
             )
             self.assertEqual(len(records), 2)
             self.assertEqual(len(load_feedback(series)["records"]), 2)
+
+    def test_batch_mapped_rna_feedback_is_saved_by_section(self):
+        with tempfile.TemporaryDirectory() as folder:
+            series = FakeSeries(Path(folder) / "sample.jser")
+            endpoints = [
+                {
+                    "section": 15,
+                    "name": f"mapped_rna_{index}",
+                    "centroid": [float(index), 2.0],
+                }
+                for index in (1, 2, 3)
+            ]
+            records = add_mapped_roi_feedback_batch(
+                series, endpoints, "incorrect", notes="checked together"
+            )
+            self.assertEqual(len(records), 3)
+            payload = load_feedback(series)
+            self.assertEqual(len(payload["records"]), 3)
+            self.assertEqual(
+                {(record["section"], record["primary_name"]) for record in payload["records"]},
+                {(15, "mapped_rna_1"), (15, "mapped_rna_2"), (15, "mapped_rna_3")},
+            )
+            self.assertTrue(all(record["verdict"] == "incorrect" for record in payload["records"]))
 
     def test_manual_rename_creates_correct_and_incorrect_neighbor_links(self):
         with tempfile.TemporaryDirectory() as folder:

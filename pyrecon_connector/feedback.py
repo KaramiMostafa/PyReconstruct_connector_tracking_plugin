@@ -148,6 +148,40 @@ def add_dapi_link_feedback_batch(
     return records
 
 
+def add_mapped_roi_feedback_batch(
+    series,
+    endpoints: list[dict],
+    verdict: str,
+    notes: str = "",
+) -> list[dict]:
+    """Save one verdict for several mapped RNA ROIs atomically."""
+    verdict = str(verdict)
+    if verdict not in VALID_VERDICTS:
+        raise ValueError("Feedback verdict must be 'correct' or 'incorrect'.")
+    created_utc = datetime.now(timezone.utc).isoformat()
+    records = [
+        {
+            "kind": "mapped_rna",
+            "verdict": verdict,
+            "section": int(endpoint["section"]),
+            "primary_name": str(endpoint["name"]),
+            "primary_centroid": [float(value) for value in endpoint["centroid"]],
+            "secondary_section": int(endpoint["section"]),
+            "secondary_name": "",
+            "secondary_centroid": None,
+            "notes": str(notes or ""),
+            "created_utc": created_utc,
+        }
+        for endpoint in endpoints
+    ]
+    if not records:
+        return []
+    payload = load_feedback(series)
+    _upsert_records(payload, records)
+    save_feedback(series, payload)
+    return records
+
+
 def add_feedback_record(
     series,
     kind: str,
