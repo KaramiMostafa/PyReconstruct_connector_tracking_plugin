@@ -16,6 +16,9 @@ import numpy as np
 MAPPED_GROUP = "multiplex_mapped_rna"
 REVIEW_GROUP = "multiplex_mapping_review"
 HIGH_CONFIDENCE_GROUP = "multiplex_mapping_high_confidence"
+DAPI_TRACE_TAG = "multiplex_dapi"
+ANCHOR_RNA_TRACE_TAG = "multiplex_rna_anchor"
+RNA_TRACE_TAGS = {ANCHOR_RNA_TRACE_TAG, MAPPED_GROUP}
 
 MAPPING_CSV_FIELDS = [
     "source_uid",
@@ -70,11 +73,14 @@ def parse_mapping_windows(value: str) -> Dict[int, List[int]]:
                 targets.extend(range(lo, hi + step, step))
             else:
                 targets.append(int(token))
-        targets = list(dict.fromkeys(targets))
+        targets = [
+            target for target in dict.fromkeys(targets)
+            if int(target) != anchor
+        ]
         if not targets:
-            raise ValueError(f"Anchor {anchor} has no target sections.")
-        if anchor in targets:
-            raise ValueError(f"Anchor {anchor} cannot also be one of its targets.")
+            raise ValueError(
+                f"Anchor {anchor} has no target sections after excluding itself."
+            )
         windows[anchor] = targets
     if not windows:
         raise ValueError("Enter at least one mapping window.")
@@ -138,7 +144,23 @@ def _idw_displacement(points: np.ndarray, origins: np.ndarray, displacements: np
     return np.asarray(out, dtype=float)
 
 
-def _trace_records(series, section_num: int, prefix: str = "", group: str = "") -> List[_TraceRecord]:
+def _trace_matches_role(trace, role: str = "") -> bool:
+    """Keep known RNA and DAPI traces out of each other's mapping inputs."""
+    tags = {str(tag) for tag in getattr(trace, "tags", set())}
+    if role == "dapi":
+        return not bool(tags & RNA_TRACE_TAGS)
+    if role == "rna":
+        return DAPI_TRACE_TAG not in tags and MAPPED_GROUP not in tags
+    return True
+
+
+def _trace_records(
+    series,
+    section_num: int,
+    prefix: str = "",
+    group: str = "",
+    role: str = "",
+) -> List[_TraceRecord]:
     section = series.loadSection(int(section_num))
     allowed = set(series.object_groups.getGroupObjects(group)) if group else None
     records: List[_TraceRecord] = []
@@ -149,6 +171,8 @@ def _trace_records(series, section_num: int, prefix: str = "", group: str = "") 
         if allowed is not None and name not in allowed:
             continue
         for trace in contour.traces:
+            if not _trace_matches_role(trace, role):
+                continue
             if not trace.closed or len(trace.points) < 3:
                 continue
             local = np.asarray(trace.points, dtype=float)
@@ -351,7 +375,16 @@ def run_multiplex_rna_mapping(
     apply_feedback: bool = True,
 ) -> dict:
     """Associate anchor RNA traces with tracked DAPI and map them to target sections."""
-    windows = parse_mapping_windows(mapping_windows) if isinstance(mapping_windows, str) else mapping_windows
+    windows = parse_mapping_windows(mapping_windows) if isinstance(mapping_windows, str) else {
+        int(anchor): [int(target) for target in targets if int(target) != int(anchor)]
+        for anchor, targets in mapping_windows.items()
+    }
+    empty_anchors = [anchor for anchor, targets in windows.items() if not targets]
+    if empty_anchors:
+        raise ValueError(
+            "No target sections remain after excluding anchor section(s): "
+            + ", ".join(str(anchor) for anchor in sorted(empty_anchors))
+        )
     if not dapi_prefix and not dapi_group:
         raise ValueError("Provide a tracked DAPI name prefix or object group.")
     if not rna_prefix and not rna_group:
@@ -369,6 +402,7 @@ def run_multiplex_rna_mapping(
     qc_notes: Dict[int, List[str]] = {}
     skipped_unassociated = 0
     skipped_missing_track = 0
+    skipped_existing = 0
     skipped_anchor_sections: List[dict] = []
     skipped_target_sections: List[dict] = []
     processed_anchor_sections: List[int] = []
@@ -425,8 +459,12 @@ def run_multiplex_rna_mapping(
                 skip_target(anchor, target_num, target_reason, note)
             continue
 
-        anchor_dapi = _trace_records(series, anchor, dapi_prefix, dapi_group)
-        anchor_rna = _trace_records(series, anchor, rna_prefix, rna_group)
+        anchor_dapi = _trace_records(
+            series, anchor, dapi_prefix, dapi_group, role="dapi"
+        )
+        anchor_rna = _trace_records(
+            series, anchor, rna_prefix, rna_group, role="rna"
+        )
         if not anchor_dapi:
             reason = "no_tracked_dapi"
             skipped_anchor_sections.append({"section": anchor, "reason": reason})
@@ -472,7 +510,9 @@ def run_multiplex_rna_mapping(
                 )
                 continue
             target_section = series.loadSection(int(target_num))
-            target_dapi = _trace_records(series, target_num, dapi_prefix, dapi_group)
+            target_dapi = _trace_records(
+                series, target_num, dapi_prefix, dapi_group, role="dapi"
+            )
             target_dapi_by_name = {record.name: record for record in target_dapi}
             dapi_plot_points[int(target_num)] = np.asarray([record.centroid for record in target_dapi], dtype=float)
             processed_target_sections.add(int(target_num))
@@ -507,6 +547,7 @@ def run_multiplex_rna_mapping(
                 mapped_name, source_uid = _stable_mapped_name(mapped_prefix, int(anchor), rna)
                 if mapped_name in target_section.contours:
                     if not overwrite:
+                        skipped_existing += 1
                         continue
                     _remove_existing(target_section, mapped_name)
 
@@ -571,6 +612,7 @@ def run_multiplex_rna_mapping(
         "review": sum(row["status"] in {"review", "expert_rejected"} for row in rows),
         "skipped_unassociated": skipped_unassociated,
         "skipped_missing_track": skipped_missing_track,
+        "skipped_existing": skipped_existing,
         "requested_anchor_sections": requested_anchors,
         "requested_target_sections": requested_targets,
         "processed_anchor_sections": sorted(set(processed_anchor_sections)),

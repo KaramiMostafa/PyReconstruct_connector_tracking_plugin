@@ -110,8 +110,12 @@ class MultiplexMappingTests(unittest.TestCase):
             parse_mapping_windows("1:2-4;6:7,8"),
             {1: [2, 3, 4], 6: [7, 8]},
         )
+        self.assertEqual(
+            parse_mapping_windows("6:4-12"),
+            {6: [4, 5, 7, 8, 9, 10, 11, 12]},
+        )
         with self.assertRaises(ValueError):
-            parse_mapping_windows("1:1-3")
+            parse_mapping_windows("1:1")
 
     def test_idw_preserves_constant_displacement(self):
         points = np.array([[2.0, 3.0], [8.0, 9.0]])
@@ -158,6 +162,48 @@ class MultiplexMappingTests(unittest.TestCase):
         ][0]
         np.testing.assert_allclose(_polygon_centroid(np.asarray(mapped.points)), [17.0, 14.0])
         self.assertIn("multiplex_mapped_rna", mapped.tags)
+
+    def test_dapi_and_rna_tags_prevent_name_collision_from_mixing_roles(self):
+        source_dapi = square("shared_cell", 10, 10, 1)
+        source_dapi.tags.add("multiplex_dapi")
+        source_rna = square("shared_cell", 10, 10, 4)
+        source_rna.tags.add("multiplex_rna_anchor")
+        target_dapi = square("shared_cell", 15, 12, 1)
+        target_dapi.tags.add("multiplex_dapi")
+        series = FakeSeries({
+            1: FakeSection(1, [source_dapi, source_rna]),
+            2: FakeSection(2, [target_dapi]),
+        })
+        series.object_groups.add("multiplex_tracked_dapi", "shared_cell")
+        series.object_groups.add("multiplex_rna_anchor", "shared_cell")
+
+        result = run_multiplex_rna_mapping(
+            series,
+            "1:2",
+            dapi_prefix="",
+            dapi_group="multiplex_tracked_dapi",
+            rna_prefix="",
+            rna_group="multiplex_rna_anchor",
+            association_max_distance=10,
+        )
+
+        self.assertEqual(result["created"], 1)
+        self.assertEqual(result["skipped_unassociated"], 0)
+
+    def test_existing_mappings_are_reported_when_overwrite_is_off(self):
+        series = FakeSeries({
+            1: FakeSection(1, [
+                square("cell_00001", 10, 10, 1),
+                square("rna_001", 10, 10, 3),
+            ]),
+            2: FakeSection(2, [square("cell_00001", 15, 12, 1)]),
+        })
+        first = run_multiplex_rna_mapping(series, "1:2", association_max_distance=10)
+        second = run_multiplex_rna_mapping(series, "1:2", association_max_distance=10)
+
+        self.assertEqual(first["created"], 1)
+        self.assertEqual(second["created"], 0)
+        self.assertEqual(second["skipped_existing"], 1)
 
     def test_skips_when_tracked_dapi_is_absent_on_target(self):
         series = FakeSeries({

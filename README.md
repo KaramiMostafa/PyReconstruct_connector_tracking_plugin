@@ -57,9 +57,11 @@ The path must point into this clone.
 
 ## In-app workflow
 
-1. Import or segment DAPI and anchor-mRNA ROIs with distinct prefixes.
-2. Track DAPI nuclei with the Hungarian or Bayesian command.
-3. Map anchor mRNA ROIs through the DAPI displacement field.
+1. Import or segment DAPI and anchor-mRNA ROIs with distinct prefixes/groups.
+2. Track DAPI nuclei with the Hungarian or Bayesian command, using the
+   `multiplex_dapi` source group so anchor mRNA ROIs cannot enter tracking.
+3. Map anchor mRNA ROIs through the DAPI displacement field using
+   `multiplex_tracked_dapi` for DAPI and `multiplex_rna_anchor` for mRNA.
 4. Review DAPI and mRNA results separately.
 5. Record expert feedback only after checking both identities and sections.
 6. Re-run tracking or mapping with **Apply saved expert feedback** enabled.
@@ -69,6 +71,10 @@ Missing image sections, anchors, or target DAPI ROIs are reported instead of
 terminating the entire analysis. If the associated DAPI identity is missing
 but common neighboring DAPI tracks remain, the mapper produces a
 low-confidence local-field fallback for mandatory review.
+
+Mapping ranges may include their anchor section for convenience. For example,
+`6:4-12` maps to sections 4, 5, and 7–12; section 6 is automatically retained
+only as the anchor.
 
 Expert feedback is stored beside the `.jser` as
 `<series>.multiplex_feedback.json`. It applies explicit link, unlink, force,
