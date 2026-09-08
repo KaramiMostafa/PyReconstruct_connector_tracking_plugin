@@ -60,7 +60,7 @@ The path must point into this clone.
 1. Import or segment DAPI and anchor-mRNA ROIs with distinct prefixes/groups.
 2. Track DAPI nuclei with the Hungarian or Bayesian command, using the
    `multiplex_dapi` source group so anchor mRNA ROIs cannot enter tracking.
-3. Map anchor mRNA ROIs through the DAPI displacement field using
+3. Map anchor mRNA ROIs through the DAPI tracks using
    `multiplex_tracked_dapi` for DAPI and `multiplex_rna_anchor` for mRNA.
 4. Review DAPI and mRNA results separately.
 5. Record expert feedback only after checking both identities and sections.
@@ -70,7 +70,14 @@ The path must point into this clone.
 Missing image sections, anchors, or target DAPI ROIs are reported instead of
 terminating the entire analysis. If the associated DAPI identity is missing
 but common neighboring DAPI tracks remain, the mapper produces a
-low-confidence local-field fallback for mandatory review.
+low-confidence local-translation fallback for mandatory review.
+
+Mapping never edits an anchor mRNA ROI and never warps its contour. Every
+generated ROI is an exact shape-preserving copy translated by one DAPI-derived
+vector. If that translation would cross an image edge, the unsafe mapped copy
+is skipped and reported instead of being clipped, warped, or repositioned.
+Re-run with **Replace previously generated mapped ROIs** enabled to replace
+older generated results; anchor mRNA ROIs remain untouched.
 
 Mapping ranges may include their anchor section for convenience. For example,
 `6:4-12` maps to sections 4, 5, and 7–12; section 6 is automatically retained

@@ -38,10 +38,22 @@ class IdentityTransform:
         return [tuple(point) for point in points]
 
 
+class ScaleTransform:
+    def __init__(self, x_scale, y_scale):
+        self.scale = np.asarray([x_scale, y_scale], dtype=float)
+
+    def map(self, points, inverted=False):
+        values = np.asarray(points, dtype=float)
+        mapped = values / self.scale if inverted else values * self.scale
+        return [tuple(point) for point in mapped]
+
+
 class FakeSection:
     def __init__(self, number, traces):
         self.n = number
         self.tform = IdentityTransform()
+        self.img_dims = (100, 100)
+        self.mag = 1.0
         self.contours = {}
         for trace in traces:
             self.contours.setdefault(trace.name, FakeContour([])).traces.append(trace)
@@ -161,7 +173,38 @@ class MultiplexMappingTests(unittest.TestCase):
             if name.startswith("mapped_rna_") for trace in contour.traces
         ][0]
         np.testing.assert_allclose(_polygon_centroid(np.asarray(mapped.points)), [17.0, 14.0])
+        np.testing.assert_allclose(
+            np.asarray(mapped.points) - np.asarray(mapped.points)[0],
+            np.asarray(rna.points) - np.asarray(rna.points)[0],
+        )
         self.assertIn("multiplex_mapped_rna", mapped.tags)
+
+    def test_nonuniform_neighbor_motion_does_not_deform_tracked_roi(self):
+        source_dapi = square("cell_00001", 10, 10, 1)
+        neighbor_source = square("cell_00002", 30, 10, 1)
+        rna = square("rna_anchor_001", 10, 10, 4)
+        series = FakeSeries({
+            1: FakeSection(1, [source_dapi, neighbor_source, rna]),
+            2: FakeSection(2, [
+                square("cell_00001", 15, 12, 1),
+                square("cell_00002", 70, 40, 1),
+            ]),
+        })
+
+        result = run_multiplex_rna_mapping(
+            series, "1:2", association_max_distance=10
+        )
+
+        mapped = [
+            trace for name, contour in series.loadSection(2).contours.items()
+            if name.startswith("mapped_rna_") for trace in contour.traces
+        ][0]
+        np.testing.assert_allclose(_polygon_centroid(np.asarray(mapped.points)), [15.0, 12.0])
+        np.testing.assert_allclose(
+            np.asarray(mapped.points) - np.asarray(mapped.points)[0],
+            np.asarray(rna.points) - np.asarray(rna.points)[0],
+        )
+        self.assertEqual(result["review"], 1)
 
     def test_dapi_and_rna_tags_prevent_name_collision_from_mixing_roles(self):
         source_dapi = square("shared_cell", 10, 10, 1)
@@ -236,6 +279,63 @@ class MultiplexMappingTests(unittest.TestCase):
             if name.startswith("mapped_rna_") for trace in contour.traces
         ][0]
         np.testing.assert_allclose(_polygon_centroid(np.asarray(mapped.points)), [15.0, 13.0])
+        source = series.loadSection(1).contours["rna_001"].traces[0]
+        np.testing.assert_allclose(
+            np.asarray(mapped.points) - np.asarray(mapped.points)[0],
+            np.asarray(source.points) - np.asarray(source.points)[0],
+        )
+
+    def test_registration_scale_cannot_change_mapped_roi_shape(self):
+        rna = square("rna_001", 10, 10, 4)
+        source_points = np.asarray(rna.points).copy()
+        source = FakeSection(1, [square("cell_00001", 10, 10, 1), rna])
+        target = FakeSection(2, [square("cell_00001", 20, 20, 1)])
+        source.tform = ScaleTransform(2.0, 2.0)
+        target.tform = ScaleTransform(0.5, 0.5)
+        series = FakeSeries({1: source, 2: target})
+
+        result = run_multiplex_rna_mapping(
+            series, "1:2", association_max_distance=10
+        )
+
+        mapped = [
+            trace for name, contour in series.loadSection(2).contours.items()
+            if name.startswith("mapped_rna_") for trace in contour.traces
+        ][0]
+        mapped_points = np.asarray(mapped.points)
+        self.assertEqual(result["created"], 1)
+        np.testing.assert_allclose(_polygon_centroid(mapped_points), [20.0, 20.0])
+        np.testing.assert_allclose(
+            mapped_points - mapped_points[0],
+            source_points - source_points[0],
+        )
+        np.testing.assert_allclose(np.asarray(rna.points), source_points)
+
+    def test_outside_translation_is_skipped_without_altering_anchor(self):
+        rna = square("rna_001", 95, 50, 4)
+        source_points = np.asarray(rna.points).copy()
+        source = FakeSection(1, [square("cell_00001", 95, 50, 1), rna])
+        target = FakeSection(2, [square("cell_00001", 104, 50, 1)])
+        target.img_dims = (200, 200)
+        series = FakeSeries({1: source, 2: target})
+
+        first = run_multiplex_rna_mapping(
+            series, "1:2", association_max_distance=10
+        )
+        self.assertEqual(first["created"], 1)
+        target.img_dims = (100, 100)
+
+        result = run_multiplex_rna_mapping(
+            series, "1:2", association_max_distance=10, overwrite=True
+        )
+
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["skipped_out_of_frame"], 1)
+        self.assertFalse(any(
+            name.startswith("mapped_rna_") and contour.traces
+            for name, contour in series.loadSection(2).contours.items()
+        ))
+        np.testing.assert_allclose(np.asarray(rna.points), source_points)
 
     def test_correct_pair_feedback_forces_reviewed_dapi_identity(self):
         source_1 = square("cell_00001", 10, 10, 1)

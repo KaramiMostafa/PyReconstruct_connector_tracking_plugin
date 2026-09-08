@@ -253,21 +253,14 @@ def _mapping_geometry(
         target_dapi_by_name[name].centroid - source_dapi_by_name[name].centroid for name in common
     ], dtype=float)
     associated_disp = target_dapi.centroid - source_dapi.centroid
+    mapped_centroid = rna.centroid + associated_disp
 
     if len(origins):
-        field = _idw_displacement(rna.aligned_points, origins, displacements, neighbor_count)
-        at_rna = _idw_displacement(rna.centroid[None, :], origins, displacements, neighbor_count)[0]
-        # Preserve local deformation across the polygon while anchoring its centroid
-        # to the reviewed DAPI identity's displacement.
-        mapped = rna.aligned_points + field + (associated_disp - at_rna)[None, :]
-        desired_centroid = rna.centroid + associated_disp
-        mapped += (desired_centroid - _polygon_centroid(mapped))[None, :]
         nearest = np.argsort(np.linalg.norm(origins - source_dapi.centroid[None, :], axis=1))[:max(1, min(neighbor_count, len(origins)))]
         residual = float(np.median(np.linalg.norm(displacements[nearest] - associated_disp[None, :], axis=1)))
     else:
-        mapped = rna.aligned_points + associated_disp[None, :]
         residual = 0.0
-    return mapped, len(common), residual
+    return mapped_centroid, len(common), residual
 
 
 def _mapping_geometry_from_field(
@@ -284,13 +277,44 @@ def _mapping_geometry_from_field(
     displacements = np.asarray([
         target_dapi_by_name[name].centroid - source_dapi_by_name[name].centroid for name in common
     ], dtype=float)
-    field = _idw_displacement(rna.aligned_points, origins, displacements, neighbor_count)
+    displacement = _idw_displacement(
+        rna.centroid[None, :], origins, displacements, neighbor_count
+    )[0]
     nearest = np.argsort(np.linalg.norm(origins - rna.centroid[None, :], axis=1))[
         :max(1, min(neighbor_count, len(origins)))
     ]
     center = np.median(displacements[nearest], axis=0)
     residual = float(np.median(np.linalg.norm(displacements[nearest] - center[None, :], axis=1)))
-    return rna.aligned_points + field, len(common), residual
+    return rna.centroid + displacement, len(common), residual
+
+
+def _section_frame_max(section) -> np.ndarray | None:
+    """Return the target image's maximum local coordinates when available."""
+    try:
+        height, width = tuple(section.img_dims)[:2]
+        frame_max = np.asarray([
+            float(width) * float(section.mag),
+            float(height) * float(section.mag),
+        ])
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    if np.any(frame_max <= 0):
+        return None
+    return frame_max
+
+
+def _polygon_within_frame(points: np.ndarray, frame_max: np.ndarray | None) -> bool:
+    """Return whether a polygon is finite and fully inside its target image."""
+    points = np.asarray(points, dtype=float)
+    if not np.isfinite(points).all():
+        return False
+    if frame_max is None:
+        return True
+    tolerance = 1e-9
+    return bool(
+        np.all(points.min(axis=0) >= -tolerance)
+        and np.all(points.max(axis=0) <= frame_max + tolerance)
+    )
 
 
 def _write_qc_plots(
@@ -403,6 +427,7 @@ def run_multiplex_rna_mapping(
     skipped_unassociated = 0
     skipped_missing_track = 0
     skipped_existing = 0
+    skipped_out_of_frame = 0
     skipped_anchor_sections: List[dict] = []
     skipped_target_sections: List[dict] = []
     processed_anchor_sections: List[int] = []
@@ -510,6 +535,12 @@ def run_multiplex_rna_mapping(
                 )
                 continue
             target_section = series.loadSection(int(target_num))
+            target_frame_max = _section_frame_max(target_section)
+            if overwrite:
+                generated_prefix = f"{mapped_prefix}a{anchor:03d}_"
+                for existing_name in list(target_section.contours):
+                    if str(existing_name).startswith(generated_prefix):
+                        _remove_existing(target_section, existing_name)
             target_dapi = _trace_records(
                 series, target_num, dapi_prefix, dapi_group, role="dapi"
             )
@@ -527,8 +558,14 @@ def run_multiplex_rna_mapping(
                 continue
 
             for rna, source_dapi, association_distance, contained, association_feedback in associations:
+                mapped_name, source_uid = _stable_mapped_name(mapped_prefix, int(anchor), rna)
+                if mapped_name in target_section.contours:
+                    if not overwrite:
+                        skipped_existing += 1
+                        continue
+
                 target_track = target_dapi_by_name.get(source_dapi.name)
-                mapping_mode = "tracked_identity_plus_local_field"
+                mapping_mode = "tracked_identity_translation"
                 if target_track is None:
                     fallback = _mapping_geometry_from_field(
                         rna, anchor_dapi_by_name, target_dapi_by_name, neighbor_count
@@ -536,24 +573,36 @@ def run_multiplex_rna_mapping(
                     if fallback is None:
                         skipped_missing_track += 1
                         continue
-                    mapped_aligned, common_neighbors, residual = fallback
-                    mapping_mode = "local_field_fallback"
+                    mapped_centroid_aligned, common_neighbors, residual = fallback
+                    mapping_mode = "local_translation_fallback"
                 else:
-                    mapped_aligned, common_neighbors, residual = _mapping_geometry(
+                    mapped_centroid_aligned, common_neighbors, residual = _mapping_geometry(
                         rna, source_dapi, target_track,
                         anchor_dapi_by_name, target_dapi_by_name, neighbor_count,
                     )
-                mapped_local = np.asarray(target_section.tform.map(mapped_aligned.tolist(), inverted=True), dtype=float)
-                mapped_name, source_uid = _stable_mapped_name(mapped_prefix, int(anchor), rna)
-                if mapped_name in target_section.contours:
-                    if not overwrite:
-                        skipped_existing += 1
-                        continue
-                    _remove_existing(target_section, mapped_name)
+                mapped_centroid_local = np.asarray(
+                    target_section.tform.map([mapped_centroid_aligned.tolist()], inverted=True),
+                    dtype=float,
+                )[0]
+                source_centroid_local = _polygon_centroid(rna.local_points)
+                mapped_local = (
+                    rna.local_points
+                    + (mapped_centroid_local - source_centroid_local)[None, :]
+                )
+                if not _polygon_within_frame(mapped_local, target_frame_max):
+                    skipped_out_of_frame += 1
+                    qc_notes.setdefault(int(target_num), []).append(
+                        "Mapped RNA ROI(s) crossing the image boundary were skipped."
+                    )
+                    continue
+                mapped_aligned = np.asarray(
+                    target_section.tform.map(mapped_local.tolist()), dtype=float
+                )
 
                 association_score = 1.0 if contained else max(0.0, 1.0 - association_distance / max(association_max_distance, 1e-6))
                 neighbor_score = min(1.0, common_neighbors / max(1.0, float(neighbor_count)))
-                residual_score = math.exp(-residual / max(float(association_max_distance), 1e-6))
+                shape_scale = max(float(np.ptp(rna.aligned_points, axis=0).max()), 1e-6)
+                residual_score = math.exp(-residual / shape_scale)
                 confidence = float(0.50 * association_score + 0.20 * neighbor_score + 0.30 * residual_score)
                 if target_track is None:
                     confidence = min(confidence, float(high_confidence_threshold) - 1e-6)
@@ -613,6 +662,7 @@ def run_multiplex_rna_mapping(
         "skipped_unassociated": skipped_unassociated,
         "skipped_missing_track": skipped_missing_track,
         "skipped_existing": skipped_existing,
+        "skipped_out_of_frame": skipped_out_of_frame,
         "requested_anchor_sections": requested_anchors,
         "requested_target_sections": requested_targets,
         "processed_anchor_sections": sorted(set(processed_anchor_sections)),
@@ -626,6 +676,10 @@ def run_multiplex_rna_mapping(
         "feedback_path": feedback_path,
         "feedback_applied": feedback_applied_count,
     }
+    if skipped_out_of_frame:
+        summary["warnings"].append(
+            f"{skipped_out_of_frame} mapped RNA ROI(s) crossed a target image boundary and were skipped."
+        )
 
     if output_dir:
         output = Path(output_dir)
