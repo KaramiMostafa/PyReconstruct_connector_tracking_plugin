@@ -5,30 +5,37 @@ expert-feedback, validation, and intensity-analysis backend used by the
 customized [PyReconstruct](https://github.com/KaramiMostafa/PyReconstruct/tree/cellpose-custom-model)
 branch.
 
+The connector owns the machine-readable plugin registry consumed by the
+customized host menu. See
+[the connector architecture](ARCHITECTURE.md) and
+[the host assembly contract](https://github.com/KaramiMostafa/PyReconstruct/blob/cellpose-custom-model/PLUGINS.md).
+
 Most users should follow the complete macOS, Linux, or Windows instructions in
 the [customized PyReconstruct installation guide](https://github.com/KaramiMostafa/PyReconstruct/blob/cellpose-custom-model/readme.md).
 
 ## Requirements
 
 - Python 3.11
-- The customized PyReconstruct and connector repositories cloned beside one
-  another
-- The `cellpose-custom-model` branch in both repositories
+- The customized host, connector, and desired tracking-engine repositories
+  cloned beside one another
+- `cellpose-custom-model` for the host/connector and `main` for the engines
 - PyTorch and torchvision compatible with the selected operating system
 
-The package metadata installs NumPy, pandas, SciPy, scikit-image, Cellpose,
-PyTorch, torchvision, ROI/TIFF readers, Matplotlib, and the tracking modules
-contained in this repository.
+The Hungarian and Bayesian engines remain separate installable packages. This
+connector imports them and adapts their ROI-table interfaces to PyReconstruct;
+the PyReconstruct host never imports them directly.
 
 ## Developer installation
 
-From the parent directory containing both repositories:
+From the parent directory containing all four repositories:
 
 ```bash
 conda create -n pyreconstruct-custom python=3.11 pip setuptools wheel -y
 conda activate pyreconstruct-custom
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e ./PyReconstruct
+python -m pip install -e ./PyReconstruct_Tracking_PlugIn_Hungarian
+python -m pip install -e ./PyReconstruct_Tracking_PlugIn_BayesianTransformer
 python -m pip install -e ./PyReconstruct_connector_tracking_plugin
 ```
 
@@ -39,6 +46,7 @@ Verify the editable import:
 
 ```bash
 python -c "import pyrecon_connector; print(pyrecon_connector.__file__)"
+python -c "from pyrecon_connector import audit_plugin_assembly; import pprint; pprint.pp(audit_plugin_assembly())"
 ```
 
 The path must point into this clone.
@@ -47,6 +55,7 @@ The path must point into this clone.
 
 | Module | Responsibility |
 |---|---|
+| `plugin_registry.py` | Authoritative plugin inventory and host-menu descriptors |
 | `segmentation_inapp.py` | U-Net and Cellpose-SAM segmentation from selected image channels |
 | `hungarian_inapp.py` | Centroid/area-based one-to-one DAPI tracking |
 | `bayesian_inapp.py` | Bayesian Transformer DAPI tracking |
@@ -92,7 +101,7 @@ single click.
 
 ## Tests
 
-With both editable repositories installed:
+With the host, connector, and tracking engines installed:
 
 ```bash
 python -m unittest discover -v tests
@@ -114,7 +123,7 @@ type(scope): description
 Examples:
 
 ```text
-feat(mapping): add local-field fallback
+feat(mapping): add local-translation fallback
 fix(tracking): preserve reviewed DAPI links
 test(feedback): cover forced mRNA associations
 docs(install): link platform setup guide

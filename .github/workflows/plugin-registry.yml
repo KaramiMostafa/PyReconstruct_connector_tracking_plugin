@@ -1,0 +1,18 @@
+name: Plugin registry
+
+on:
+  pull_request:
+  push:
+    branches:
+      - cellpose-custom-model
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate registry metadata and public APIs
+        run: python -m unittest -v tests.test_plugin_registry

@@ -73,6 +73,21 @@ def measure_antibody_intensity(*args, **kwargs):
     return _run(*args, **kwargs)
 
 
+def get_plugin_inventory(*args, **kwargs):
+    from .plugin_registry import get_plugin_inventory as _run
+    return _run(*args, **kwargs)
+
+
+def get_plugin_menu_spec(*args, **kwargs):
+    from .plugin_registry import get_plugin_menu_spec as _run
+    return _run(*args, **kwargs)
+
+
+def audit_plugin_assembly(*args, **kwargs):
+    from .plugin_registry import audit_plugin_assembly as _run
+    return _run(*args, **kwargs)
+
+
 __all__ = [
     "run_hungarian_tracking_on_series",
     "run_bayesian_tracking_on_series",
@@ -89,4 +104,7 @@ __all__ = [
     "write_feedback_review",
     "validate_mapped_rna",
     "measure_antibody_intensity",
+    "get_plugin_inventory",
+    "get_plugin_menu_spec",
+    "audit_plugin_assembly",
 ]

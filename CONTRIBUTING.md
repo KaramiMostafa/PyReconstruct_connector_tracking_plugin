@@ -35,3 +35,11 @@ python scripts/check_conventional_commits.py --range main..HEAD
 
 GitHub Actions enforces the same rule. Prefer squash merging with a
 Conventional Commit title.
+
+## Adding a plugin
+
+Keep reusable algorithms independent of PyReconstruct. Put section/trace
+conversion and write-back code in this connector, expose a lazy public wrapper
+from `pyrecon_connector/__init__.py`, and register the capability and host menu
+action in `pyrecon_connector/plugin_registry.py`. Update the host handler and
+cross-repository assembly test in the customized PyReconstruct repository.
