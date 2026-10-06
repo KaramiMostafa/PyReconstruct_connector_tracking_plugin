@@ -1,6 +1,6 @@
 # PyReconstruct microscopy connector
 
-This repository provides the tracking, segmentation, multiplex mRNA mapping,
+This repository provides the EM registration, tracking, segmentation, multiplex mRNA mapping,
 expert-feedback, validation, and intensity-analysis backend used by the
 customized [PyReconstruct](https://github.com/KaramiMostafa/PyReconstruct/tree/cellpose-custom-model)
 branch.
@@ -56,6 +56,7 @@ The path must point into this clone.
 | Module | Responsibility |
 |---|---|
 | `plugin_registry.py` | Authoritative plugin inventory and host-menu descriptors |
+| `registration.py` / `registration_core.py` | Landmark-based EM image/mask TPS registration and result export |
 | `segmentation_inapp.py` | U-Net and Cellpose-SAM segmentation from selected image channels |
 | `hungarian_inapp.py` | Centroid/area-based one-to-one DAPI tracking |
 | `bayesian_inapp.py` | Bayesian Transformer DAPI tracking |
@@ -65,6 +66,10 @@ The path must point into this clone.
 | `connector.py` | Legacy command-line `.jser` tracking connector |
 
 ## In-app workflow
+
+For EM image pairs, use **Plug-In → Registration → EM images + masks + landmarks…**.
+See [EM registration inputs, coordinates, and review](REGISTRATION.md). This
+workflow exports a new registered dataset and is independent of DAPI tracking.
 
 1. Import or segment DAPI and anchor-mRNA ROIs with distinct prefixes/groups.
 2. Track DAPI nuclei with the Hungarian or Bayesian command, using the

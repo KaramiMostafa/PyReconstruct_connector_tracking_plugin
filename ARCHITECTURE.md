@@ -12,7 +12,7 @@ Connector registry and adapters
         ├── Hungarian tracking core
         ├── Bayesian Transformer tracking core
         ├── Cellpose and PyTorch
-        └── connector-native mapping, feedback, and analysis
+        └── connector-native EM registration, mapping, feedback, and analysis
 ```
 
 `pyrecon_connector/plugin_registry.py` is the authoritative plugin list. It
@@ -36,3 +36,9 @@ python -c "from pyrecon_connector import audit_plugin_assembly; import pprint; p
 
 An unavailable engine is reported against its plugin without preventing the
 base PyReconstruct application from starting.
+
+EM registration uses `registration.py` for file validation, CSV adaptation, and
+review exports, with the GUI-independent numerical TPS/resampling functions in
+`registration_core.py`. The host owns only the file-selection/review dialog and
+background worker and calls the public `run_em_registration` facade. It does
+not modify open-series affine transforms to represent a nonlinear warp.

@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
     name="pyrecon-cell-tracker",
-    version="0.5.0",
-    description="PyReconstruct plugins for tracking, segmentation, multiplex RNA mapping, and expert review",
+    version="0.6.0",
+    description="PyReconstruct plugins for EM registration, tracking, segmentation, multiplex RNA mapping, and expert review",
     author="Mostafa Karami",
     packages=find_packages(),
     py_modules=["run_plugin"],
@@ -21,6 +21,7 @@ setup(
         "cellpose>=4.0.4",
         "zarr>=2.16",
         "tifffile>=2024.0",
+        "Pillow>=9.1",
     ],
     entry_points={
         "console_scripts": [

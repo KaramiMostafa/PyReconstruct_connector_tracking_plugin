@@ -13,6 +13,13 @@ from importlib import import_module, util
 
 PLUGIN_INVENTORY = (
     {
+        "id": "em_registration",
+        "name": "Landmark-based EM image and mask registration",
+        "connector_apis": ("run_em_registration",),
+        "engine_packages": ("numpy", "scipy", "tifffile", "PIL"),
+        "repository": "https://github.com/KaramiMostafa/PyReconstruct_connector_tracking_plugin",
+    },
+    {
         "id": "expert_feedback",
         "name": "Human-in-the-loop expert feedback",
         "connector_apis": (
@@ -80,6 +87,13 @@ def _action(attr_name: str, text: str, handler: str, plugin_id: str) -> dict:
 
 
 PLUGIN_MENU = (
+    {
+        "attr_name": "registrationpluginmenu",
+        "text": "Registration",
+        "actions": (
+            _action("run_em_registration_act", "EM images + masks + landmarks...", "runEMRegistration", "em_registration"),
+        ),
+    },
     {
         "attr_name": "expertfeedbackpluginmenu",
         "text": "⚠ Expert feedback (HIGH RISK)",

@@ -16,3 +16,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate registry metadata and public APIs
         run: python -m unittest -v tests.test_plugin_registry
+
+  registration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install registration dependencies
+        run: python -m pip install numpy==1.24.1 scipy==1.14.1 tifffile==2024.9.20 "Pillow>=9.1"
+      - name: Validate EM image and mask registration
+        run: python -m unittest -v tests.test_registration
