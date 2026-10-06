@@ -57,6 +57,7 @@ The path must point into this clone.
 |---|---|
 | `plugin_registry.py` | Authoritative plugin inventory and host-menu descriptors |
 | `registration.py` / `registration_core.py` | Landmark-based EM image/mask TPS registration and result export |
+| `serial_registration.py` | Chained TPS/affine registration, complete-stack export, and propagated landmarks |
 | `segmentation_inapp.py` | U-Net and Cellpose-SAM segmentation from selected image channels |
 | `hungarian_inapp.py` | Centroid/area-based one-to-one DAPI tracking |
 | `bayesian_inapp.py` | Bayesian Transformer DAPI tracking |
@@ -67,7 +68,10 @@ The path must point into this clone.
 
 ## In-app workflow
 
-For EM image pairs, use **Plug-In → Registration → EM images + masks + landmarks…**.
+For a serial TIFF stack or an EM image pair, use
+**Plug-In → Registration → Serial sections / EM landmarks…**.
+Serial mode matches each section to the preceding section's registered landmarks
+and outputs the complete stack in the first section's coordinate system.
 See [EM registration inputs, coordinates, and review](REGISTRATION.md). This
 workflow exports a new registered dataset and is independent of DAPI tracking.
 

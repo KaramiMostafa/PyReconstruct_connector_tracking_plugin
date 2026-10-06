@@ -1,3 +1,8 @@
+def run_serial_registration(*args, **kwargs):
+    from .serial_registration import run_serial_registration as _run
+    return _run(*args, **kwargs)
+
+
 def run_em_registration(*args, **kwargs):
     from .registration import run_em_registration as _run
     return _run(*args, **kwargs)
@@ -94,6 +99,7 @@ def audit_plugin_assembly(*args, **kwargs):
 
 
 __all__ = [
+    "run_serial_registration",
     "run_em_registration",
     "run_hungarian_tracking_on_series",
     "run_bayesian_tracking_on_series",

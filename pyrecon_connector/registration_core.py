@@ -29,8 +29,8 @@ def validate_points(points, shape, label):
         raise ValueError("Use at most 1000 landmarks for this global TPS fit.")
     if not np.isfinite(points).all():
         raise ValueError(f"{label}: landmark coordinates must be finite.")
-    height, width = shape
-    if ((points < 0).any() or (points[:, 0] > width - 1).any()
+    height, width = shape if shape is not None else (None, None)
+    if shape is not None and ((points < 0).any() or (points[:, 0] > width - 1).any()
             or (points[:, 1] > height - 1).any()):
         raise ValueError(
             f"{label}: landmarks fall outside the {width} × {height} image. "
@@ -44,8 +44,22 @@ def validate_points(points, shape, label):
     return points
 
 
-def fit_transforms(fixed_points, moving_points):
-    """Return inverse resampling and forward landmark TPS fits."""
+def fit_transforms(fixed_points, moving_points, method="tps"):
+    """Return inverse resampling and forward landmark maps for TPS or affine."""
+    if method == "affine":
+        origin = moving_points.mean(axis=0)
+        scale = max(np.abs(moving_points - origin).max(), 1.0)
+        design = np.column_stack(((moving_points - origin) / scale, np.ones(len(moving_points))))
+        coefficients, _, rank, _ = np.linalg.lstsq(design, fixed_points, rcond=None)
+        if rank < 3 or np.linalg.matrix_rank(coefficients[:2]) < 2:
+            raise ValueError("Cannot fit affine transform: singular landmark geometry.")
+        linear = coefficients[:2] / scale
+        offset = coefficients[2] - origin @ linear
+        inverse_linear = np.linalg.inv(linear)
+        return (lambda xy: (np.asarray(xy) - offset) @ inverse_linear,
+                lambda xy: np.asarray(xy) @ linear + offset)
+    if method != "tps":
+        raise ValueError(f"Unknown registration method: {method!r}")
     try:
         inverse = RBFInterpolator(
             fixed_points, moving_points, kernel="thin_plate_spline", degree=1,
@@ -61,11 +75,13 @@ def fit_transforms(fixed_points, moving_points):
 
 
 def warp_pair(moving_image, moving_mask, fixed_shape, inverse, *,
-              progress=None, cancelled=None, block_rows=64):
+              progress=None, cancelled=None, block_rows=64, prototype_sampling=False):
     """Warp image and labels with one shared sampling grid, in bounded blocks.
 
     Image: bilinear interpolation, retaining its dtype. Mask: nearest pixel
     indexing, retaining even uint64 label IDs exactly. Invalid pixels become 0.
+    prototype_sampling uses floating-point interpolation with constant-grid
+    padding followed by a dtype cast, matching the serial Python prototype.
     """
     if block_rows < 1:
         raise ValueError("block_rows must be positive.")
@@ -88,7 +104,9 @@ def warp_pair(moving_image, moving_mask, fixed_shape, inverse, *,
         valid = ((source[:, 0] >= 0) & (source[:, 0] <= moving_image.shape[1] - 1)
                  & (source[:, 1] >= 0) & (source[:, 1] <= moving_image.shape[0] - 1))
         values = map_coordinates(
-            moving_image, source[:, ::-1].T, order=1, mode="constant",
+            moving_image, source[:, ::-1].T, order=1,
+            mode="grid-constant" if prototype_sampling else "constant",
+            output=np.float64 if prototype_sampling else moving_image.dtype,
             cval=0, prefilter=False,
         )
         registered[first:last] = values.reshape(last - first, width)

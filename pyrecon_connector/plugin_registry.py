@@ -14,8 +14,8 @@ from importlib import import_module, util
 PLUGIN_INVENTORY = (
     {
         "id": "em_registration",
-        "name": "Landmark-based EM image and mask registration",
-        "connector_apis": ("run_em_registration",),
+        "name": "Serial-section and paired EM landmark registration",
+        "connector_apis": ("run_em_registration", "run_serial_registration"),
         "engine_packages": ("numpy", "scipy", "tifffile", "PIL"),
         "repository": "https://github.com/KaramiMostafa/PyReconstruct_connector_tracking_plugin",
     },
@@ -91,7 +91,7 @@ PLUGIN_MENU = (
         "attr_name": "registrationpluginmenu",
         "text": "Registration",
         "actions": (
-            _action("run_em_registration_act", "EM images + masks + landmarks...", "runEMRegistration", "em_registration"),
+            _action("run_em_registration_act", "Serial sections / EM landmarks...", "runEMRegistration", "em_registration"),
         ),
     },
     {
