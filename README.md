@@ -66,14 +66,56 @@ The path must point into this clone.
 | `multiplex_analysis.py` | Expert-ROI validation and antibody-intensity analysis |
 | `connector.py` | Legacy command-line `.jser` tracking connector |
 
-## In-app workflow
+## EM registration: serial stack or image pair
 
-For a serial TIFF stack or an EM image pair, use
-**Plug-In → Registration → Serial sections / EM landmarks…**.
-Serial mode matches each section to the preceding section's registered landmarks
-and outputs the complete stack in the first section's coordinate system.
-See [EM registration inputs, coordinates, and review](REGISTRATION.md). This
-workflow exports a new registered dataset and is independent of DAPI tracking.
+Update the host and connector on `cellpose-custom-model`, restart PyReconstruct,
+and open **Plug-In → Registration → Serial sections / EM landmarks…**.
+Registration uses SciPy on the CPU; no GPU or model checkpoint is required.
+
+For the locally supplied `Mostafa` dataset, choose:
+
+| Setting | Selection |
+|---|---|
+| Mode | **Serial section stack (chained registration)** |
+| Images folder | `Mostafa/EM_10` |
+| Landmark CSV | `Mostafa/EM_10/correspondence points underwood 1 to 10.csv` |
+| Output parent | `Mostafa`, or another existing folder |
+| Transformation | **Thin-plate spline (TPS)**, or **Affine** |
+| Coordinates | **Top-left / Zero-based** |
+
+Click **Run registration**. Sections are sorted numerically, and the first
+section defines the output canvas. Each later section is fitted using the
+preceding section's **registered landmarks**. Every current landmark is then
+transformed for use by the following section. Results are written to a new
+`serial_registration_…/` folder with the complete `images/` stack, `previews/`,
+`coverage/`, `registered_landmarks.csv`, and `registration.json`.
+
+Inputs must be single-plane grayscale TIFFs with trailing slice numbers and a
+`point,slice,X,Y` CSV (the original unnamed point column is accepted). Each
+adjacent pair needs at least three distinct, non-collinear shared landmark IDs.
+Use raw-image pixel coordinates, not aligned PyReconstruct micrometre coordinates.
+Every serial image must have landmarks, and every CSV slice must have an image.
+The sample microscopy data are provided separately, not bundled with this repo.
+
+For **Single fixed/moving pair (optional masks)**, select two image TIFFs and
+their slice numbers in the CSV. For the sample, use sections **1 / 2** and leave
+both masks blank. Other datasets can supply both masks, matching their image
+dimensions, with integer labels and 0 for background. The same TPS warps the
+image and its mask; nearest-neighbor mask sampling preserves label IDs.
+Serial mode does not currently accept masks. Pair outputs include the registered
+image, optional masks, a preview, coverage map, and landmark-residual report.
+
+Review the results, then use **File → New → From images…** to select the output
+TIFFs in `images/`, using the reference image's pixel size. TPS can deform
+geometry and serial fits can drift; fitting residuals alone are not independent
+accuracy measurements. Existing source images and project ROIs are not modified.
+Failed or cancelled runs do not publish a partial dataset.
+
+See [the registration guide](REGISTRATION.md) for CSV examples, coordinate
+conventions, complete output details, and `run_serial_registration` /
+`run_em_registration` API examples.
+
+## Multiplex in-app workflow
 
 1. Import or segment DAPI and anchor-mRNA ROIs with distinct prefixes/groups.
 2. Track DAPI nuclei with the Hungarian or Bayesian command, using the
@@ -116,7 +158,8 @@ With the host, connector, and tracking engines installed:
 python -m unittest discover -v tests
 ```
 
-The suite covers multichannel segmentation inputs, missing-section handling,
+The suite covers serial/paired EM registration, coordinate conventions, mask
+label preservation, cancellation, multichannel segmentation inputs, missing-section handling,
 feedback persistence, DAPI link corrections, mRNA association constraints,
 displacement fallback, expert validation, and antibody-intensity outputs.
 
