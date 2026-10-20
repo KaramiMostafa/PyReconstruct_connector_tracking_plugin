@@ -1,3 +1,28 @@
+def get_registration_images(*args, **kwargs):
+    from .registration_landmarks import get_registration_images as _run
+    return _run(*args, **kwargs)
+
+
+def get_registration_image(*args, **kwargs):
+    from .registration_landmarks import get_registration_image as _run
+    return _run(*args, **kwargs)
+
+
+def load_registration_landmarks(*args, **kwargs):
+    from .registration_landmarks import load_registration_landmarks as _run
+    return _run(*args, **kwargs)
+
+
+def save_registration_landmarks(*args, **kwargs):
+    from .registration_landmarks import save_registration_landmarks as _run
+    return _run(*args, **kwargs)
+
+
+def get_project_landmarks(*args, **kwargs):
+    from .registration_landmarks import get_project_landmarks as _run
+    return _run(*args, **kwargs)
+
+
 def run_serial_registration(*args, **kwargs):
     from .serial_registration import run_serial_registration as _run
     return _run(*args, **kwargs)
@@ -99,6 +124,11 @@ def audit_plugin_assembly(*args, **kwargs):
 
 
 __all__ = [
+    "get_registration_images",
+    "get_registration_image",
+    "load_registration_landmarks",
+    "save_registration_landmarks",
+    "get_project_landmarks",
     "run_serial_registration",
     "run_em_registration",
     "run_hungarian_tracking_on_series",

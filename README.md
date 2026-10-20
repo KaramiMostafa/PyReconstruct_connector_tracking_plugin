@@ -90,6 +90,15 @@ transformed for use by the following section. Results are written to a new
 `serial_registration_…/` folder with the complete `images/` stack, `previews/`,
 `coverage/`, `registered_landmarks.csv`, and `registration.json`.
 
+To create a CSV yourself, select the images and click **Create/edit pixel
+landmarks…**. A separate two-image window lets you click matching features
+under the same landmark ID, zoom/pan, change slices, and review or delete points.
+Click **Save CSV and use for registration…** to select the resulting zero-based,
+top-left pixel CSV automatically. **Use project landmarks…** can instead convert
+named trace centres (for example `lm_1`, `lm_2`) from an open project's µm
+coordinates, using its calibration and exact source TIFFs. Check the converted
+markers before saving; normal project CSVs are not pixel CSVs.
+
 Inputs must be single-plane grayscale TIFFs with trailing slice numbers and a
 `point,slice,X,Y` CSV (the original unnamed point column is accepted). Each
 adjacent pair needs at least three distinct, non-collinear shared landmark IDs.
@@ -105,7 +114,8 @@ image and its mask; nearest-neighbor mask sampling preserves label IDs.
 Serial mode does not currently accept masks. Pair outputs include the registered
 image, optional masks, a preview, coverage map, and landmark-residual report.
 
-Review the results, then use **File → New → From images…** to select the output
+The **Registration complete** message gives the exact `images/` path and buttons
+to open or copy it. Review the results, then use **File → New → From images…** to select the output
 TIFFs in `images/`, using the reference image's pixel size. TPS can deform
 geometry and serial fits can drift; fitting residuals alone are not independent
 accuracy measurements. Existing source images and project ROIs are not modified.

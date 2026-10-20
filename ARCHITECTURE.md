@@ -39,6 +39,12 @@ base PyReconstruct application from starting.
 
 EM registration uses `registration.py` for file validation, CSV adaptation, and
 review exports, with the GUI-independent numerical TPS/resampling functions in
-`registration_core.py`. The host owns only the file-selection/review dialog and
-background worker and calls the public `run_em_registration` facade. It does
-not modify open-series affine transforms to represent a nonlinear warp.
+`registration_core.py`. `serial_registration.py` chains section transforms.
+`registration_landmarks.py` validates and exports pixel landmarks and converts
+stored project trace centres using the source-image calibration. These modules
+do not depend on Qt.
+
+The host owns the file-selection/review dialog, raw-pixel landmark window,
+completion notice, and background worker. It accesses registration and landmark
+preparation through public connector facade functions. It does not modify
+open-series affine transforms to represent a nonlinear warp.

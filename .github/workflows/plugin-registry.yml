@@ -27,4 +27,4 @@ jobs:
       - name: Install registration dependencies
         run: python -m pip install numpy==1.24.1 scipy==1.14.1 tifffile==2024.9.20 "Pillow>=9.1"
       - name: Validate EM image and mask registration
-        run: python -m unittest -v tests.test_registration
+        run: python -m unittest -v tests.test_registration tests.test_serial_registration tests.test_registration_landmarks

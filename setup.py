@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="pyrecon-cell-tracker",
-    version="0.6.0",
+    version="0.7.0",
     description="PyReconstruct plugins for EM registration, tracking, segmentation, multiplex RNA mapping, and expert review",
     author="Mostafa Karami",
     packages=find_packages(),

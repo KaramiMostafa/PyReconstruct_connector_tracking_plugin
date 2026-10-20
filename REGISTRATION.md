@@ -88,6 +88,75 @@ This mode handles one selected pair using TPS, including optional label masks.
 
 ## Landmarks
 
+### Interactive pixel window
+
+After choosing the image folder or image pair, click **Create/edit pixel
+landmarks…**. No existing CSV or open project is required.
+
+1. Select a landmark ID and click the same feature in both raw images.
+2. Choose **New landmark** for another feature. Re-clicking moves the current
+   ID; **Delete selected rows** removes only those image/ID observations.
+3. Scroll to zoom and drag to pan. For serial data, change the slice selectors
+   and continue matching IDs through the stack.
+4. Use at least three distinct, non-collinear shared IDs on every adjacent pair.
+   More well-spaced landmarks can constrain local deformation, but must represent
+   real correspondences.
+5. Click **Save CSV and use for registration…**. Saving validates bounds and
+   correspondence. The parent dialog selects the CSV and sets the pixel
+   convention automatically.
+
+The viewer uses original image dimensions, even when zoomed out. The top-left
+pixel centre is `(0, 0)`, X increases rightward, and Y increases downward.
+Clicks select pixel centres; imported subpixel coordinates are retained.
+Contrast scaling is for display only. Neither TIFF intensities nor project
+alignments are changed by the landmark editor.
+
+An existing CSV selected in the parent dialog is converted according to its
+origin/indexing settings before opening the editor. **Load pixel CSV…** inside
+the editor expects zero-based, top-left coordinates. Use the parent settings
+first for another pixel convention.
+
+### Converting project landmarks
+
+PyReconstruct stores unaligned trace coordinates in **micrometres (µm)**, with
+Y increasing upward. This is not the same as raw-image pixels or aligned
+project coordinates.
+
+In an open project, create small landmark traces named `lm_1`, `lm_2`, etc.
+Use the same name for corresponding features, with exactly one trace per
+name per image. Open registration, select the exact TIFFs used as project
+sources, then choose **Use project landmarks…** in the pixel window and enter
+`lm_`. The connector converts each trace's stored centroid using its section's
+µm-per-pixel calibration. It matches source paths, not project section numbers,
+because importing images can renumber sections. Ambiguous or unmatched sources
+are rejected. Zarr sources, copied files, resized images, and arbitrary exported
+project CSVs are not converted automatically; use the raw-pixel editor instead.
+
+Review the markers before saving. Incorrect project calibration produces
+incorrect conversion. The operation does not rename, move, or transform project
+traces. Stored trace centres are already unaligned, so the active alignment is
+not inverted a second time.
+
+For code using aligned coordinates, the conversion helpers accept the known
+forward PyReconstruct affine transform and undo it explicitly:
+
+```python
+from pyrecon_connector.registration_landmarks import pr_to_pixels, pixels_to_pr
+
+pixels = pr_to_pixels(raw_um_points, pixel_size_um, image_height)
+# With aligned coordinates, supply [a, b, tx, c, d, ty]:
+pixels = pr_to_pixels(aligned_um_points, pixel_size_um, image_height, transform)
+raw_um_points = pixels_to_pr(pixels, pixel_size_um, image_height)
+```
+
+The conversion follows the host's `point_2_pix` convention:
+`x_px = x_um / pixel_size_um`, `y_px = image_height - y_um / pixel_size_um`.
+This uses **H**, not **H−1**. In contrast, flipping an already pixel-indexed
+bottom-left CSV uses **H−1** after subtracting its indexing base. These are
+different operations; selecting "Bottom-left" does not convert µm to pixels.
+
+### CSV formats
+
 Use the original long table (an unnamed first column is also accepted):
 
 ```csv
@@ -160,6 +229,10 @@ IDs are not assumed to correspond between sections.
 
 Review the preview and full-resolution results, then use PyReconstruct's
 **File → New → From images…** workflow with the result's `images/` folder.
+After a successful serial or paired run, **Registration complete** displays
+this exact folder with **Open images folder** and **Copy images path** buttons.
+Use the reference image's pixel size when importing. A failed or cancelled run
+does not show a completion message.
 The nonlinear transform cannot be stored in PyReconstruct's affine alignment
 field. Existing project images, alignments, and vector ROIs are not replaced
 or transformed. Masks remain TIFFs in their own folder for subsequent use.

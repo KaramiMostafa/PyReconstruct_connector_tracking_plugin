@@ -15,7 +15,11 @@ PLUGIN_INVENTORY = (
     {
         "id": "em_registration",
         "name": "Serial-section and paired EM landmark registration",
-        "connector_apis": ("run_em_registration", "run_serial_registration"),
+        "connector_apis": (
+            "run_em_registration", "run_serial_registration", "get_registration_images",
+            "get_registration_image", "load_registration_landmarks",
+            "save_registration_landmarks", "get_project_landmarks",
+        ),
         "engine_packages": ("numpy", "scipy", "tifffile", "PIL"),
         "repository": "https://github.com/KaramiMostafa/PyReconstruct_connector_tracking_plugin",
     },
